@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 from database import SessionLocal, engine, Base
 from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Rol
 
+
 app = FastAPI()
+
 
 # Asegurar que las tablas existen en la BD
 Base.metadata.create_all(bind=engine)
@@ -34,28 +36,47 @@ def get_db():
 
 
 
+from collections import defaultdict
+from fastapi import Depends, APIRouter
+from sqlalchemy.orm import Session
+from fastapi import FastAPI, Depends, HTTPException
+
+router = APIRouter()
+
 @app.get("/data/3d")
 def get_3d_data(nombre_archivo: str, db: Session = Depends(get_db)):
+    archivo = db.query(ArchivoMocap).filter(ArchivoMocap.nombre_archivo == nombre_archivo).first()
+    if not archivo:
+        raise HTTPException(status_code=404, detail=f"Archivo '{nombre_archivo}' no encontrado")
+
+    # Obtener los frame_ids pertenecientes al archivo
+    frame_ids = db.query(Frame.frame_id).filter(Frame.sesion_id == archivo.sesion_id).limit(50).subquery()
+
     data = (
-        db.query(Cinematica, Segmento.nombre, Cinematica.frame_id)  
-        .join(Frame, Cinematica.frame_id == Frame.frame_id)
-        .join(SesionCaptura, Frame.sesion_id == SesionCaptura.sesion_id)
-        .join(ArchivoMocap, SesionCaptura.sesion_id == ArchivoMocap.sesion_id)
+        db.query(Cinematica, Segmento.nombre, Cinematica.frame_id)
         .join(Segmento, Cinematica.segmento_id == Segmento.segmento_id)
-        .filter(ArchivoMocap.nombre_archivo == nombre_archivo)
-        .limit(500)
+        .filter(Cinematica.frame_id.in_(frame_ids))
+        .order_by(Cinematica.frame_id, Segmento.nombre)
         .all()
     )
-    return [
-        {
+
+    frames = defaultdict(list)
+    for c, nombre_segmento, frame_id in data:
+        frames[frame_id].append({
+            "segmento": nombre_segmento,
             "x": c.pos_x,
             "y": c.pos_y,
             "z": c.pos_z,
-            "segmento": nombre_segmento,
-            "frame_id": frame_id  
-        }
-        for c, nombre_segmento, frame_id in data
-    ]
+            "rot_w": c.rot_w,
+            "rot_x": c.rot_x,
+            "rot_y": c.rot_y,
+            "rot_z": c.rot_z,
+        })
+
+    frames_ordenados = [frames[k] for k in sorted(frames.keys())]
+    print("Frames finales cargados:", len(frames_ordenados))
+    return frames_ordenados
+
 @app.get("/data/2d")
 def get_2d_data(nombre_archivo: str, db: Session = Depends(get_db)):
     data = (

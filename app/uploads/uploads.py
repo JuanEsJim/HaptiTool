@@ -49,7 +49,7 @@ async def upload_csv(
         db.commit()
         db.refresh(frame)
 
-        # Guardar ejemplo de cinemática
+        # Guardar cinemática
         db.add(Cinematica(
             frame_id=frame.frame_id,
             segmento_id="hips",
@@ -62,7 +62,7 @@ async def upload_csv(
             rot_z=row["hips.rotation.z"]
         ))
 
-        # Guardar ejemplo de ángulo articular
+        # Guardar ángulo articular
         db.add(AnguloArticular(
             frame_id=frame.frame_id,
             joint_name="KneeFlexExtR",

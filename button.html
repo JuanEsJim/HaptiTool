@@ -4,6 +4,17 @@
     <meta charset="utf-8" />
     <title>Visualizador de Esqueletos 3D</title>
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #f4f4f9; color: #333; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .upload-section, .controls, .plot-container { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; }
+        .control-btn { padding: 10px 15px; border: none; background-color: #007bff; color: white; border-radius: 5px; cursor: pointer; transition: background-color 0.2s; }
+        .control-btn:hover { background-color: #0056b3; }
+        .control-slider { display: flex; align-items: center; gap: 10px; }
+        .plot { height: 600px; width: 100%; }
+        #status { font-style: italic; color: #555; }
+    </style>
 </head>
 <body>
     <div class="header">
@@ -13,11 +24,10 @@
     
     <div class="upload-section">
         <h2>Seleccionar archivo para visualizar</h2>
-        <select id="archivoSelect" onchange="cargarYMostrarArchivo(this.value)">
+        <select id="archivoSelect" onchange="cargarDatos(this.value)">
             <option value="">Selecciona un archivo...</option>
         </select>
         <div id="status"></div>
-        
         <div class="instructions">
             <p><strong>Instrucciones:</strong> Selecciona un archivo de la lista para visualizar el esqueleto en 3D.</p>
         </div>
@@ -35,7 +45,7 @@
         
         <div class="control-slider">
             <label>Frame: <span id="frameCounter">0</span>/<span id="totalFrames">0</span></label>
-            <input type="range" id="frameSlider" min="0" value="0" oninput="goToFrame(this.value)">
+            <input type="range" id="frameSlider" min="0" value="0" oninput="goToFrame(parseInt(this.value))">
         </div>
     </div>
 
@@ -44,188 +54,239 @@
         <div id="plot3d" class="plot"></div>
     </div>
 
- <script>
-const API_BASE = 'http://127.0.0.1:8000';
-const statusEl = document.getElementById('status');
-let datosCompletos = [];
-let animationInterval = null;
-let currentFrame = 0;
-let animationSpeed = 1.0;
+<script>
+    const API_BASE = 'http://127.0.0.1:8000';
+    let datosCompletos = [];
+    let currentFrame = 0;
+    let animationInterval = null;
+    let animationSpeed = 1.0;
+    
+    // Nombres de los segmentos del esqueleto. ¡VERIFICADOS CON LA IMAGEN!
+    const SKELETON_CONNECTIONS = [
+        { parent: "hips", child: "spine" },
+        { parent: "spine", child: "upper_spine" },
+        { parent: "upper_spine", child: "neck" },
+        { parent: "neck", child: "head" },
 
-// Cargar lista de archivos disponibles
-async function cargarNombresArchivos() {
-    const select = document.getElementById('archivoSelect');
-    statusEl.textContent = 'Cargando lista de archivos...';
-    try {
-        const res = await fetch(`${API_BASE}/lista_archivos/`);
-        const archivos = await res.json();
-        select.innerHTML = '<option value="">Selecciona un archivo...</option>';
-        archivos.forEach(nombre => {
-            const option = document.createElement('option');
-            option.value = nombre;
-            option.textContent = nombre;
-            select.appendChild(option);
-        });
-        statusEl.textContent = '';
-    } catch (err) {
-        statusEl.textContent = 'Error al conectar con el backend';
-        statusEl.className = 'error';
-    }
-}
-window.onload = cargarNombresArchivos;
+        { parent: "upper_spine", child: "left_shoulder" },
+        { parent: "left_shoulder", child: "left_upper_arm" },
+        { parent: "left_upper_arm", child: "left_lower_arm" },
+        { parent: "left_lower_arm", child: "left_hand" },
 
-// Cargar y mostrar archivo seleccionado
-async function cargarYMostrarArchivo(nombre) {
-    if (!nombre) return;
-    statusEl.textContent = `Cargando ${nombre}...`;
-    try {
-        const res = await fetch(`${API_BASE}/data/3d?nombre_archivo=${encodeURIComponent(nombre)}`);
-        const datos = await res.json();
+        { parent: "upper_spine", child: "right_shoulder" },
+        { parent: "right_shoulder", child: "right_upper_arm" },
+        { parent: "right_upper_arm", child: "right_lower_arm" },
+        { parent: "right_lower_arm", child: "right_hand" },
 
-        console.log("Datos crudos desde backend:", datos.slice(0, 5)); // 👀 debug
-
-        datosCompletos = organizarDatosPorFrame(datos);
-
-        if (datosCompletos.length > 0) {
-            document.getElementById('animationControls').style.display = 'flex';
-            document.getElementById('frameSlider').max = datosCompletos.length - 1;
-            document.getElementById('totalFrames').textContent = datosCompletos.length;
-            goToFrame(0);
-        }
-        statusEl.textContent = `Datos cargados: ${datosCompletos.length} frames`;
-        statusEl.className = 'success';
-    } catch (err) {
-        console.error(err);
-        statusEl.textContent = 'Error al cargar archivo';
-        statusEl.className = 'error';
-    }
-}
-
-// Organizar datos por frame usando la respuesta de la BD
-function organizarDatosPorFrame(datos) {
-    const frames = {};
-    datos.forEach(item => {
-        if (!frames[item.frame_id]) frames[item.frame_id] = [];
-        frames[item.frame_id].push({
-            segmento: item.segmento, // ahora llega como nombre
-            x: item.x,
-            y: item.y,
-            z: item.z
-        });
-    });
-
-    console.log("Frames organizados:", frames); // 👀 debug
-
-    return Object.values(frames);
-}
-
-// Ir a un frame específico
-function goToFrame(frameIndex) {
-    currentFrame = parseInt(frameIndex);
-    document.getElementById('frameSlider').value = currentFrame;
-    document.getElementById('frameCounter').textContent = currentFrame;
-    graficarEsqueleto3D(datosCompletos[currentFrame]);
-}
-
-// Reproducir animación
-function playAnimation() {
-    if (animationInterval) clearInterval(animationInterval);
-    animationInterval = setInterval(() => {
-        if (currentFrame >= datosCompletos.length - 1) stopAnimation();
-        else goToFrame(currentFrame + 1);
-    }, 500 / animationSpeed);
-}
-function pauseAnimation() { if (animationInterval) clearInterval(animationInterval); }
-function stopAnimation() { pauseAnimation(); goToFrame(0); }
-function changeSpeed(speed) { 
-    animationSpeed = parseFloat(speed); 
-    document.getElementById('speedValue').textContent = speed + 'x'; 
-}
-
-
-// Dibujar frame
-function graficarEsqueleto3D(frameData) {
-    if (!frameData || frameData.length === 0) return;
-
-    // Transformación de coordenadas
-    const puntos = frameData.map(p => ({
-        segmento: p.segmento,
-        x: p.x,
-        y: p.z,
-        z: p.y
-    }));
-
-    // Puntos (articulaciones)
-    const tracePuntos = {
-        x: puntos.map(p => p.x),
-        y: puntos.map(p => p.y),
-        z: puntos.map(p => p.z),
-        mode: 'markers',
-        type: 'scatter3d',
-        marker: { size: 5, color: 'red' },
-        text: puntos.map(p => p.segmento),
-        hoverinfo: 'text'
-    };
-
-    const conexiones = [
-        ["root", "hips"],
-        ["hips", "spine"],
-        ["spine", "upper_spine"],
-        ["upper_spine", "neck"],
-        ["neck", "head"],
-
-        ["upper_spine", "left_shoulder"],
-        ["upper_spine", "right_shoulder"],
-        ["left_shoulder", "left_upper_arm"],
-        ["right_shoulder", "right_upper_arm"],
-        ["left_upper_arm", "left_lower_arm"],
-        ["right_upper_arm", "right_lower_arm"],
-        ["left_lower_arm", "left_hand"],
-        ["right_lower_arm", "right_hand"],
-
-        ["hips", "left_upper_leg"],
-        ["hips", "right_upper_leg"],
-        ["left_upper_leg", "left_lower_leg"],
-        ["right_upper_leg", "right_lower_leg"],
-        ["left_lower_leg", "left_foot"],
-        ["right_lower_leg", "right_foot"],
+        { parent: "hips", child: "left_upper_leg" },
+        { parent: "left_upper_leg", child: "left_lower_leg" },
+        { parent: "left_lower_leg", child: "left_foot" },
+        
+        { parent: "hips", child: "right_upper_leg" },
+        { parent: "right_upper_leg", child: "right_lower_leg" },
+        { parent: "right_lower_leg", child: "right_foot" },
+        
+        // El segmento 'root' y '_unknown' no tienen conexiones típicas, pero podrían ser el origen.
+        // A menudo 'root' está en la misma posición que 'hips'.
+        // Si necesitas conectarlos, puedes añadir una línea aquí.
+        // { parent: "root", child: "hips" } 
     ];
 
-    const tracesLineas = conexiones.map(([a, b]) => {
-        const pa = puntos.find(p => p.segmento === a);
-        const pb = puntos.find(p => p.segmento === b);
-        if (!pa || !pb) return null;
-        return {
-            x: [pa.x, pb.x],
-            y: [pa.y, pb.y],
-            z: [pa.z, pb.z],
+    async function cargarListaArchivos() {
+        const select = document.getElementById('archivoSelect');
+        const statusEl = document.getElementById('status');
+        statusEl.textContent = 'Cargando lista de archivos...';
+        try {
+            const res = await fetch(`${API_BASE}/lista_archivos/`);
+            if (!res.ok) throw new Error('Error al obtener la lista');
+            const archivos = await res.json();
+            select.innerHTML = '<option value="">Selecciona un archivo...</option>';
+            archivos.forEach(nombre => {
+                const option = document.createElement('option');
+                option.value = nombre;
+                option.textContent = nombre;
+                select.appendChild(option);
+            });
+            statusEl.textContent = '';
+        } catch (err) {
+            console.error('Error al cargar lista de archivos:', err);
+            statusEl.textContent = 'Error al cargar lista de archivos';
+        }
+    }
+
+    async function cargarDatos(nombreArchivo) {
+        if (!nombreArchivo) return;
+        stopAnimation(); 
+        document.getElementById('status').textContent = `Cargando ${nombreArchivo}...`;
+        try {
+            const res = await fetch(`${API_BASE}/data/3d?nombre_archivo=${encodeURIComponent(nombreArchivo)}`);
+            if (!res.ok) throw new Error('Error al cargar datos del archivo');
+            const data = await res.json();
+            datosCompletos = data;
+            
+            document.getElementById('frameSlider').max = datosCompletos.length > 0 ? datosCompletos.length - 1 : 0;
+            document.getElementById('totalFrames').textContent = datosCompletos.length;
+            document.getElementById('animationControls').style.display = datosCompletos.length > 0 ? 'flex' : 'none';
+            
+            if (datosCompletos.length > 0) {
+                inicializarGrafico(datosCompletos[0]); 
+                goToFrame(0);
+            } else {
+                Plotly.newPlot('plot3d', [], {});
+                document.getElementById('status').textContent = 'Archivo sin datos de cinemática';
+            }
+        } catch (err) {
+            console.error("Error al cargar datos:", err);
+            document.getElementById('status').textContent = 'Error al cargar datos del archivo';
+        }
+    }
+
+    function getSegmentCoordinates(frameData, segmentName) {
+        const segmentMap = new Map(frameData.map(p => [p.segmento, p]));
+        const segment = segmentMap.get(segmentName);
+        return segment ? { x: segment.x, y: segment.y, z: segment.z } : null;
+    }
+
+    function inicializarGrafico(frameData) {
+        if (!frameData || frameData.length === 0) {
+            Plotly.newPlot('plot3d', [], {});
+            return;
+        }
+
+        const x_markers = frameData.map(p => p.x);
+        const y_markers = frameData.map(p => p.y);
+        const z_markers = frameData.map(p => p.z);
+        const labels_markers = frameData.map(p => p.segmento);
+
+        const x_lines = [];
+        const y_lines = [];
+        const z_lines = [];
+
+        SKELETON_CONNECTIONS.forEach(conn => {
+            const parentCoords = getSegmentCoordinates(frameData, conn.parent);
+            const childCoords = getSegmentCoordinates(frameData, conn.child);
+
+            if (parentCoords && childCoords) {
+                x_lines.push(parentCoords.x, childCoords.x, null);
+                y_lines.push(parentCoords.y, childCoords.y, null);
+                z_lines.push(parentCoords.z, childCoords.z, null);
+            }
+        });
+
+        const trace_markers = {
+            x: x_markers, y: y_markers, z: z_markers,
+            mode: 'markers',
+            type: 'scatter3d',
+            marker: { size: 6, color: 'red' },
+            text: labels_markers,
+            hoverinfo: 'text',
+            name: 'Articulaciones'
+        };
+
+        const trace_lines = {
+            x: x_lines, y: y_lines, z: z_lines,
             mode: 'lines',
             type: 'scatter3d',
-            line: { width: 3, color: 'blue' },
-            showlegend: false
+            line: { width: 4, color: 'blue' },
+            name: 'Esqueleto'
         };
-    }).filter(Boolean);
 
-    const layout = {
-        margin: { l: 0, r: 0, t: 30, b: 0 },
-        scene: {
-            xaxis: { title: 'X (lado)' },
-            yaxis: { title: 'Y (profundidad)' },
-            zaxis: { title: 'Z (altura)' },
+        const layout = {
+            margin: {l:0, r:0, b:0, t:0},
+            scene: {
+                xaxis: {title: 'X', autorange: true},
+                yaxis: {title: 'Y', autorange: true},
+                zaxis: {title: 'Z', autorange: true},
+                aspectmode: 'cube'
+            },
+            showlegend: true
+        };
 
-            aspectmode: "manual",
-            aspectratio: { x: 1, y: 1, z: 2 }, 
+        Plotly.newPlot('plot3d', [trace_markers, trace_lines], layout);
+    }
+    
+    function graficarEsqueleto3D(frameData) {
+        if (!frameData || frameData.length === 0) return;
 
-            camera: {
-                eye: { x: 1.5, y: 1.5, z: 1 },
-                up: { x: 0, y: 0, z: 1 } 
+        const x_markers = frameData.map(p => p.x);
+        const y_markers = frameData.map(p => p.y);
+        const z_markers = frameData.map(p => p.z);
+
+        const x_lines = [];
+        const y_lines = [];
+        const z_lines = [];
+
+        SKELETON_CONNECTIONS.forEach(conn => {
+            const parentCoords = getSegmentCoordinates(frameData, conn.parent);
+            const childCoords = getSegmentCoordinates(frameData, conn.child);
+
+            if (parentCoords && childCoords) {
+                x_lines.push(parentCoords.x, childCoords.x, null);
+                y_lines.push(parentCoords.y, childCoords.y, null);
+                z_lines.push(parentCoords.z, childCoords.z, null);
             }
+        });
+
+        const update_markers = {
+            x: [x_markers],
+            y: [y_markers],
+            z: [z_markers]
+        };
+
+        const update_lines = {
+            x: [x_lines],
+            y: [y_lines],
+            z: [z_lines]
+        };
+        
+        Plotly.restyle('plot3d', update_markers, [0]);
+        Plotly.restyle('plot3d', update_lines, [1]);
+    }
+
+    function goToFrame(index) {
+        if (index >= 0 && index < datosCompletos.length) {
+            currentFrame = index;
+            graficarEsqueleto3D(datosCompletos[currentFrame]);
+            document.getElementById('frameCounter').textContent = (currentFrame + 1) + '/' + datosCompletos.length;
+            document.getElementById('frameSlider').value = currentFrame;
         }
+    }
+
+    function playAnimation() {
+        if (animationInterval) return;
+        if (datosCompletos.length === 0) return;
+
+        animationInterval = setInterval(() => {
+            currentFrame = (currentFrame + 1) % datosCompletos.length;
+            goToFrame(currentFrame);
+        }, 1000 / animationSpeed);
+    }
+
+    function pauseAnimation() {
+        if (animationInterval) {
+            clearInterval(animationInterval);
+            animationInterval = null;
+        }
+    }
+
+    function stopAnimation() {
+        pauseAnimation();
+        currentFrame = 0;
+        goToFrame(currentFrame);
+    }
+
+    function changeSpeed(speed) {
+        animationSpeed = parseFloat(speed);
+        document.getElementById('speedValue').textContent = speed + 'x';
+        if (animationInterval) {
+            pauseAnimation();
+            playAnimation();
+        }
+    }
+
+    window.onload = () => {
+        cargarListaArchivos();
     };
-
-    Plotly.react('plot3d', [tracePuntos, ...tracesLineas], layout);
-}
-
 </script>
 
 </body>
