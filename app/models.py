@@ -81,3 +81,9 @@ class Contacto(Base):
     left_foot_contact = Column(Boolean)
     right_foot_contact = Column(Boolean)
     frame = relationship("Frame")
+class Tokens(Base):
+    __tablename__ = "tokens"
+    token_id = Column(Integer, primary_key=True, index=True)
+    access_token = Column(String, unique=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuario.usuario_id"))
+    usuario = relationship("Usuario")

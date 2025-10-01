@@ -7,33 +7,32 @@
     <style>
         body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #f4f4f9; color: #333; }
         .header { text-align: center; margin-bottom: 20px; }
-        .upload-section, .controls, .plot-container { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .section { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
         .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; }
         .control-btn { padding: 10px 15px; border: none; background-color: #007bff; color: white; border-radius: 5px; cursor: pointer; transition: background-color 0.2s; }
         .control-btn:hover { background-color: #0056b3; }
         .control-slider { display: flex; align-items: center; gap: 10px; }
         .plot { height: 600px; width: 100%; }
         #status { font-style: italic; color: #555; }
+        .logout-btn { position: absolute; top: 20px; right: 20px; }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>Visualizador de Esqueletos 3D</h1>
         <p>Visualización de datos de captura de movimiento</p>
+        <button class="logout-btn control-btn" onclick="logout()">Cerrar Sesión</button>
     </div>
     
-    <div class="upload-section">
+    <div class="section">
         <h2>Seleccionar archivo para visualizar</h2>
         <select id="archivoSelect" onchange="cargarDatos(this.value)">
             <option value="">Selecciona un archivo...</option>
         </select>
         <div id="status"></div>
-        <div class="instructions">
-            <p><strong>Instrucciones:</strong> Selecciona un archivo de la lista para visualizar el esqueleto en 3D.</p>
-        </div>
     </div>
 
-    <div class="controls" id="animationControls" style="display: none;">
+    <div class="section controls" id="animationControls" style="display: none;">
         <button onclick="playAnimation()" id="playBtn" class="control-btn">▶ Reproducir</button>
         <button onclick="pauseAnimation()" id="pauseBtn" class="control-btn">⏸ Pausar</button>
         <button onclick="stopAnimation()" id="stopBtn" class="control-btn">⏹ Detener</button>
@@ -49,7 +48,7 @@
         </div>
     </div>
 
-    <div id="plot3dContainer" class="plot-container">
+    <div id="plot3dContainer" class="section">
         <h2>Visualización 3D del Esqueleto</h2>
         <div id="plot3d" class="plot"></div>
     </div>
@@ -61,43 +60,60 @@
     let animationInterval = null;
     let animationSpeed = 1.0;
     
-    // Nombres de los segmentos del esqueleto. ¡VERIFICADOS CON LA IMAGEN!
+    
+    const SEGMENT_MAP = {
+      "new 0000": "hips", "new 0001": "spine", "new 0002": "upper_spine", "new 0003": "neck", "new 0004": "head",
+      "new 0005": "left_shoulder", "new 0006": "left_upper_arm", "new 0007": "left_lower_arm", "new 0008": "left_hand",
+      "new 0009": "right_shoulder", "new 0010": "right_upper_arm", "new 0011": "right_lower_arm", "new 0012": "right_hand",
+      "new 0013": "left_upper_leg", "new 0014": "left_lower_leg", "new 0015": "left_foot", "new 0016": "right_upper_leg",
+      "new 0017": "right_lower_leg", "new 0018": "right_foot",
+    };
+    
     const SKELETON_CONNECTIONS = [
-        { parent: "hips", child: "spine" },
-        { parent: "spine", child: "upper_spine" },
-        { parent: "upper_spine", child: "neck" },
-        { parent: "neck", child: "head" },
-
-        { parent: "upper_spine", child: "left_shoulder" },
-        { parent: "left_shoulder", child: "left_upper_arm" },
-        { parent: "left_upper_arm", child: "left_lower_arm" },
-        { parent: "left_lower_arm", child: "left_hand" },
-
-        { parent: "upper_spine", child: "right_shoulder" },
-        { parent: "right_shoulder", child: "right_upper_arm" },
-        { parent: "right_upper_arm", child: "right_lower_arm" },
-        { parent: "right_lower_arm", child: "right_hand" },
-
-        { parent: "hips", child: "left_upper_leg" },
-        { parent: "left_upper_leg", child: "left_lower_leg" },
-        { parent: "left_lower_leg", child: "left_foot" },
-        
-        { parent: "hips", child: "right_upper_leg" },
-        { parent: "right_upper_leg", child: "right_lower_leg" },
-        { parent: "right_lower_leg", child: "right_foot" },
-        
-        // El segmento 'root' y '_unknown' no tienen conexiones típicas, pero podrían ser el origen.
-        // A menudo 'root' está en la misma posición que 'hips'.
-        // Si necesitas conectarlos, puedes añadir una línea aquí.
-        // { parent: "root", child: "hips" } 
+      { parent: "hips", child: "spine" }, { parent: "spine", child: "upper_spine" }, { parent: "upper_spine", child: "neck" }, { parent: "neck", child: "head" },
+      { parent: "upper_spine", child: "left_shoulder" }, { parent: "left_shoulder", child: "left_upper_arm" }, { parent: "left_upper_arm", child: "left_lower_arm" }, { parent: "left_lower_arm", child: "left_hand" },
+      { parent: "upper_spine", child: "right_shoulder" }, { parent: "right_shoulder", child: "right_upper_arm" }, { parent: "right_upper_arm", child: "right_lower_arm" }, { parent: "right_lower_arm", child: "right_hand" },
+      { parent: "hips", child: "left_upper_leg" }, { parent: "left_upper_leg", child: "left_lower_leg" }, { parent: "left_lower_leg", child: "left_foot" },
+      { parent: "hips", child: "right_upper_leg" }, { parent: "right_upper_leg", child: "right_lower_leg" }, { parent: "right_lower_leg", child: "right_foot" },
     ];
+    
+    function logout() {
+        localStorage.removeItem('access_token');
+        window.location.href = 'login.html';
+    }
+
+    async function checkAuthAndRole() {
+        const token = localStorage.getItem('access_token');
+        if (!token) {
+            window.location.href = 'login.html';
+            return;
+        }
+
+        try {
+            const res = await fetch(`${API_BASE}/users/me`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            const user = await res.json();
+            if (!res.ok) {
+                 window.location.href = 'login.html'; 
+            } else {
+                cargarListaArchivos();
+            }
+        } catch (err) {
+            console.error('Error de autenticación:', err);
+            window.location.href = 'login.html';
+        }
+    }
 
     async function cargarListaArchivos() {
         const select = document.getElementById('archivoSelect');
         const statusEl = document.getElementById('status');
+        const token = localStorage.getItem('access_token');
         statusEl.textContent = 'Cargando lista de archivos...';
         try {
-            const res = await fetch(`${API_BASE}/lista_archivos/`);
+            const res = await fetch(`${API_BASE}/lista_archivos/`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             if (!res.ok) throw new Error('Error al obtener la lista');
             const archivos = await res.json();
             select.innerHTML = '<option value="">Selecciona un archivo...</option>';
@@ -117,9 +133,12 @@
     async function cargarDatos(nombreArchivo) {
         if (!nombreArchivo) return;
         stopAnimation(); 
+        const token = localStorage.getItem('access_token');
         document.getElementById('status').textContent = `Cargando ${nombreArchivo}...`;
         try {
-            const res = await fetch(`${API_BASE}/data/3d?nombre_archivo=${encodeURIComponent(nombreArchivo)}`);
+            const res = await fetch(`${API_BASE}/data/3d?nombre_archivo=${encodeURIComponent(nombreArchivo)}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
             if (!res.ok) throw new Error('Error al cargar datos del archivo');
             const data = await res.json();
             datosCompletos = data;
@@ -129,6 +148,7 @@
             document.getElementById('animationControls').style.display = datosCompletos.length > 0 ? 'flex' : 'none';
             
             if (datosCompletos.length > 0) {
+                // Pasa los datos del primer frame
                 inicializarGrafico(datosCompletos[0]); 
                 goToFrame(0);
             } else {
@@ -141,12 +161,30 @@
         }
     }
 
-    function getSegmentCoordinates(frameData, segmentName) {
+   
+    function getSegmentCoordinates(frameData, skeletonName) {
+        
         const segmentMap = new Map(frameData.map(p => [p.segmento, p]));
-        const segment = segmentMap.get(segmentName);
-        return segment ? { x: segment.x, y: segment.y, z: segment.z } : null;
+        
+      
+        let segment = segmentMap.get(skeletonName);
+
+        
+        if (!segment) {
+            const c3dName = Object.keys(SEGMENT_MAP).find(key => SEGMENT_MAP[key] === skeletonName);
+            if (c3dName) {
+                segment = segmentMap.get(c3dName);
+            }
+        }
+
+        if (segment && segment.x !== undefined && segment.y !== undefined && segment.z !== undefined) {
+            return { x: segment.x, y: segment.y, z: segment.z };
+        }
+        
+        return null;
     }
 
+    
     function inicializarGrafico(frameData) {
         if (!frameData || frameData.length === 0) {
             Plotly.newPlot('plot3d', [], {});
@@ -156,7 +194,9 @@
         const x_markers = frameData.map(p => p.x);
         const y_markers = frameData.map(p => p.y);
         const z_markers = frameData.map(p => p.z);
-        const labels_markers = frameData.map(p => p.segmento);
+        
+        
+        const labels_markers = frameData.map(p => SEGMENT_MAP[p.segmento] || p.segmento);
 
         const x_lines = [];
         const y_lines = [];
@@ -165,8 +205,7 @@
         SKELETON_CONNECTIONS.forEach(conn => {
             const parentCoords = getSegmentCoordinates(frameData, conn.parent);
             const childCoords = getSegmentCoordinates(frameData, conn.child);
-
-            if (parentCoords && childCoords) {
+       if (parentCoords && childCoords) {
                 x_lines.push(parentCoords.x, childCoords.x, null);
                 y_lines.push(parentCoords.y, childCoords.y, null);
                 z_lines.push(parentCoords.z, childCoords.z, null);
@@ -178,7 +217,7 @@
             mode: 'markers',
             type: 'scatter3d',
             marker: { size: 6, color: 'red' },
-            text: labels_markers,
+            text: labels_markers, 
             hoverinfo: 'text',
             name: 'Articulaciones'
         };
@@ -204,9 +243,10 @@
 
         Plotly.newPlot('plot3d', [trace_markers, trace_lines], layout);
     }
+
     
     function graficarEsqueleto3D(frameData) {
-        if (!frameData || frameData.length === 0) return;
+        if (!frameData) return;
 
         const x_markers = frameData.map(p => p.x);
         const y_markers = frameData.map(p => p.y);
@@ -220,27 +260,25 @@
             const parentCoords = getSegmentCoordinates(frameData, conn.parent);
             const childCoords = getSegmentCoordinates(frameData, conn.child);
 
+            // Validar si ambas coordenadas existen antes de intentar dibujar la línea
             if (parentCoords && childCoords) {
                 x_lines.push(parentCoords.x, childCoords.x, null);
                 y_lines.push(parentCoords.y, childCoords.y, null);
                 z_lines.push(parentCoords.z, childCoords.z, null);
             }
         });
-
-        const update_markers = {
-            x: [x_markers],
-            y: [y_markers],
-            z: [z_markers]
-        };
-
-        const update_lines = {
-            x: [x_lines],
-            y: [y_lines],
-            z: [z_lines]
-        };
         
-        Plotly.restyle('plot3d', update_markers, [0]);
-        Plotly.restyle('plot3d', update_lines, [1]);
+        Plotly.restyle('plot3d', { x: [x_markers], y: [y_markers], z: [z_markers] }, [0]);
+        Plotly.restyle('plot3d', { x: [x_lines], y: [y_lines], z: [z_lines] }, [1]);
+    }
+    
+    function playAnimation() {
+        if (animationInterval) return;
+        if (datosCompletos.length === 0) return;
+        animationInterval = setInterval(() => {
+            currentFrame = (currentFrame + 1) % datosCompletos.length;
+            goToFrame(currentFrame);
+        }, 1000 / animationSpeed);
     }
 
     function goToFrame(index) {
@@ -250,16 +288,6 @@
             document.getElementById('frameCounter').textContent = (currentFrame + 1) + '/' + datosCompletos.length;
             document.getElementById('frameSlider').value = currentFrame;
         }
-    }
-
-    function playAnimation() {
-        if (animationInterval) return;
-        if (datosCompletos.length === 0) return;
-
-        animationInterval = setInterval(() => {
-            currentFrame = (currentFrame + 1) % datosCompletos.length;
-            goToFrame(currentFrame);
-        }, 1000 / animationSpeed);
     }
 
     function pauseAnimation() {
@@ -284,10 +312,7 @@
         }
     }
 
-    window.onload = () => {
-        cargarListaArchivos();
-    };
+    window.onload = checkAuthAndRole;
 </script>
-
 </body>
 </html>

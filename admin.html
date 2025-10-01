@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Panel de Administración</title>
+    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #f4f4f9; color: #333; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .section { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .controls, .upload-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; }
+        .control-btn { padding: 10px 15px; border: none; background-color: #007bff; color: white; border-radius: 5px; cursor: pointer; transition: background-color 0.2s; }
+        .control-btn:hover { background-color: #0056b3; }
+        .control-slider { display: flex; align-items: center; gap: 10px; }
+        .plot { height: 600px; width: 100%; }
+        #status, #uploadStatus { font-style: italic; color: #555; }
+        .logout-btn { position: absolute; top: 20px; right: 20px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+         <h1>Panel de Administración</h1>
+         <p>Subida y visualización de datos de captura de movimiento</p>
+         <button class="logout-btn control-btn" onclick="logout()">Cerrar Sesión</button>
+        <button id="createAdminBtn" class="control-btn" style="display: none;">Crear Nuevo Administrador</button>
+    </div>
+     <div id="createAdminForm" class="section" style="display: none;">
+    <h3>Crear Nuevo Administrador</h3>
+     <form id="newAdminForm">
+         <label for="adminName">Nombre:</label><br>
+        <input type="text" id="adminName" required><br>
+        <label for="adminEmail">Email:</label><br>
+         <input type="email" id="adminEmail" required><br>
+         <label for="adminPassword">Contraseña:</label><br>
+         <input type="password" id="adminPassword" required><br>
+         <button type="submit">Crear Admin</button>
+         <p id="adminStatus" style="color: green;"></p>
+     </form>
+</div>
+
+    <div class="section upload-section">
+         <h2>Subir Archivo</h2>
+         <p>Selecciona un archivo CSV o C3D para subir. (Sólo administradores)</p>
+         <div class="upload-controls">
+            <input type="file" id="fileInput" accept=".csv, .c3d">
+            <button class="control-btn" onclick="uploadFile()">Subir Archivo</button>
+        </div>
+        <div id="uploadStatus"></div>
+    </div>
+ 
+     <div class="section">
+        <h2>Visualizar Datos</h2>
+        <select id="archivoSelect" onchange="cargarDatos(this.value)">
+            <option value="">Selecciona un archivo...</option>
+         </select>
+        <div id="status"></div>
+     </div>
+
+    <div class="section controls" id="animationControls" style="display: none;">
+         <button onclick="playAnimation()" id="playBtn" class="control-btn">▶ Reproducir</button>
+         <button onclick="pauseAnimation()" id="pauseBtn" class="control-btn">⏸ Pausar</button>
+         <button onclick="stopAnimation()" id="stopBtn" class="control-btn">⏹ Detener</button>
+
+    <div class="control-slider">
+         <label>Velocidad: <span id="speedValue">1.0x</span></label>
+         <input type="range" id="speedSlider" min="0.1" max="5" step="0.1" value="1" oninput="changeSpeed(this.value)">
+         </div>
+
+         <div class="control-slider">
+             <label>Frame: <span id="frameCounter">0</span>/<span id="totalFrames">0</span></label>
+            <input type="range" id="frameSlider" min="0" value="0" oninput="goToFrame(parseInt(this.value))">
+         </div>
+    </div>
+
+    <div id="plot3dContainer" class="section">
+        <h2>Visualización 3D del Esqueleto</h2>
+             <div id="plot3d" class="plot"></div>
+     </div>
+
+<script>
+    const API_BASE = 'http://127.0.0.1:8000';
+const createAdminForm = document.getElementById('createAdminForm');
+const newAdminForm = document.getElementById('newAdminForm');
+const createAdminBtn = document.getElementById('createAdminBtn');
+const adminStatus = document.getElementById('adminStatus');
+
+let datosCompletos = [];
+let currentFrame = 0;
+let animationInterval = null;
+let animationSpeed = 1.0;
+
+const SEGMENT_MAP = {
+    "new 0000": "hips", "new 0001": "spine", "new 0002": "upper_spine", "new 0003": "neck", "new 0004": "head",
+    "new 0005": "left_shoulder", "new 0006": "left_upper_arm", "new 0007": "left_lower_arm", "new 0008": "left_hand",
+    "new 0009": "right_shoulder", "new 0010": "right_upper_arm", "new 0011": "right_lower_arm", "new 0012": "right_hand",
+    "new 0013": "left_upper_leg", "new 0014": "left_lower_leg", "new 0015": "left_foot", "new 0016": "right_upper_leg",
+    "new 0017": "right_lower_leg", "new 0018": "right_foot",
+};
+
+const SKELETON_CONNECTIONS = [
+    { parent: "hips", child: "spine" }, { parent: "spine", child: "upper_spine" }, { parent: "upper_spine", child: "neck" }, { parent: "neck", child: "head" },
+    { parent: "upper_spine", child: "left_shoulder" }, { parent: "left_shoulder", child: "left_upper_arm" }, { parent: "left_upper_arm", child: "left_lower_arm" }, { parent: "left_lower_arm", child: "left_hand" },
+    { parent: "upper_spine", child: "right_shoulder" }, { parent: "right_shoulder", child: "right_upper_arm" }, { parent: "right_upper_arm", child: "right_lower_arm" }, { parent: "right_lower_arm", child: "right_hand" },
+    { parent: "hips", child: "left_upper_leg" }, { parent: "left_upper_leg", child: "left_lower_leg" }, { parent: "left_lower_leg", child: "left_foot" },
+    { parent: "hips", child: "right_upper_leg" }, { parent: "right_upper_leg", child: "right_lower_leg" }, { parent: "right_lower_leg", child: "right_foot" },
+];
+
+function logout() {
+    localStorage.removeItem('access_token');
+    window.location.href = 'login.html';
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    const token = localStorage.getItem('access_token');
+    if (!token) {
+        window.location.href = 'login.html';
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/users/me`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!res.ok) {
+            const errorData = await res.json();
+            throw new Error(errorData.detail || 'Error al obtener datos de usuario');
+        }
+
+        const user = await res.json();
+
+        if (user.rol.nombre === 'admin' || user.rol.nombre === 'super_admin') {
+            cargarListaArchivos();
+        }
+
+        if (user.rol.nombre === 'super_admin') {
+            createAdminBtn.style.display = 'block';
+        }
+        
+    } catch (err) {
+        console.error('Error al verificar el rol del usuario:', err);
+        localStorage.removeItem('access_token');
+        window.location.href = 'login.html';
+    }
+});
+
+createAdminBtn.addEventListener('click', () => {
+    createAdminForm.style.display = createAdminForm.style.display === 'none' ? 'block' : 'none';
+});
+
+newAdminForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    adminStatus.textContent = '';
+    const token = localStorage.getItem('access_token');
+
+    const nombre = document.getElementById('adminName').value;
+    const email = document.getElementById('adminEmail').value;
+    const password = document.getElementById('adminPassword').value;
+
+ 
+    if (!nombre || !email || !password) {
+        adminStatus.textContent = 'Por favor, completa todos los campos.';
+        adminStatus.style.color = 'red';
+        return;
+    }
+
+    try {
+        const res = await fetch(`${API_BASE}/create_admin`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({ nombre, email, password })
+        });
+        
+        const data = await res.json();
+        
+        if (!res.ok) {
+         
+            if (data && data.detail) {
+                if (Array.isArray(data.detail)) {
+                    const errorMessages = data.detail.map(err => `${err.loc.join('.')}: ${err.msg}`);
+                    throw new Error(errorMessages.join(', '));
+                } else {
+                    throw new Error(data.detail);
+                }
+            } else {
+                throw new Error('Error al crear administrador');
+            }
+        }
+
+        adminStatus.textContent = '¡Administrador creado con éxito!';
+        adminStatus.style.color = 'green';
+        newAdminForm.reset();
+    } catch (err) {
+        adminStatus.textContent = err.message;
+        adminStatus.style.color = 'red';
+    }
+});
+
+async function uploadFile() {
+    const fileInput = document.getElementById('fileInput');
+    const file = fileInput.files[0];
+    const statusEl = document.getElementById('uploadStatus');
+    
+    if (!file) {
+        statusEl.textContent = 'Por favor, selecciona un archivo.';
+        return;
+    }
+    
+    const token = localStorage.getItem('access_token');
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const endpoint = file.name.toLowerCase().endsWith('.c3d' || '.csv') ? 'upload_c3d/' : 'upload_csv/';
+    
+    statusEl.textContent = 'Subiendo archivo...';
+    
+    try {
+        const res = await fetch(`${API_BASE}/${endpoint}`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: formData
+        });
+        
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Error al subir el archivo');
+        
+        statusEl.textContent = 'Archivo subido con éxito!';
+        cargarListaArchivos();
+    } catch (err) {
+        console.error('Error al subir el archivo:', err);
+        statusEl.textContent = `Error al subir el archivo: ${err.message}`;
+    }
+}
+
+async function cargarListaArchivos() {
+    const select = document.getElementById('archivoSelect');
+    const statusEl = document.getElementById('status');
+    const token = localStorage.getItem('access_token');
+    statusEl.textContent = 'Cargando lista de archivos...';
+    try {
+        const res = await fetch(`${API_BASE}/lista_archivos/`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Error al obtener la lista');
+        const archivos = await res.json();
+        select.innerHTML = '<option value="">Selecciona un archivo...</option>';
+        archivos.forEach(nombre => {
+            const option = document.createElement('option');
+            option.value = nombre;
+            option.textContent = nombre;
+            select.appendChild(option);
+        });
+        statusEl.textContent = '';
+    } catch (err) {
+        console.error('Error al cargar lista de archivos:', err);
+        statusEl.textContent = 'Error al cargar lista de archivos';
+    }
+}
+
+async function cargarDatos(nombreArchivo) {
+    if (!nombreArchivo) return;
+    stopAnimation();
+    const token = localStorage.getItem('access_token');
+    document.getElementById('status').textContent = `Cargando ${nombreArchivo}...`;
+    try {
+        const res = await fetch(`${API_BASE}/data/3d?nombre_archivo=${encodeURIComponent(nombreArchivo)}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) throw new Error('Error al cargar datos del archivo');
+        const data = await res.json();
+        datosCompletos = data;
+        
+        document.getElementById('frameSlider').max = datosCompletos.length > 0 ? datosCompletos.length - 1 : 0;
+        document.getElementById('totalFrames').textContent = datosCompletos.length;
+        document.getElementById('animationControls').style.display = datosCompletos.length > 0 ? 'flex' : 'none';
+        
+        if (datosCompletos.length > 0) {
+            inicializarGrafico(datosCompletos[0]);
+            goToFrame(0);
+        } else {
+            Plotly.newPlot('plot3d', [], {});
+            document.getElementById('status').textContent = 'Archivo sin datos de cinemática';
+        }
+    } catch (err) {
+        console.error("Error al cargar datos:", err);
+        document.getElementById('status').textContent = 'Error al cargar datos del archivo';
+    }
+}
+
+function getSegmentCoordinates(frameData, segmentName) {
+    const mappedName = SEGMENT_MAP[segmentName] || segmentName;
+    const segmentMap = new Map(frameData.map(p => [p.segmento, p]));
+    const segment = segmentMap.get(mappedName);
+    return segment ? { x: segment.x, y: segment.y, z: segment.z } : null;
+}
+
+function inicializarGrafico(frameData) {
+    if (!frameData || frameData.length === 0) {
+        Plotly.newPlot('plot3d', [], {});
+        return;
+    }
+
+    const x_markers = frameData.map(p => p.x);
+    const y_markers = frameData.map(p => p.y);
+    const z_markers = frameData.map(p => p.z);
+    const labels_markers = frameData.map(p => p.segmento);
+
+    const x_lines = [];
+    const y_lines = [];
+    const z_lines = [];
+
+    SKELETON_CONNECTIONS.forEach(conn => {
+        const parentCoords = getSegmentCoordinates(frameData, conn.parent);
+        const childCoords = getSegmentCoordinates(frameData, conn.child);
+
+        if (parentCoords && childCoords) {
+            x_lines.push(parentCoords.x, childCoords.x, null);
+            y_lines.push(parentCoords.y, childCoords.y, null);
+            z_lines.push(parentCoords.z, childCoords.z, null);
+        }
+    });
+
+    const trace_markers = { x: x_markers, y: y_markers, z: z_markers, mode: 'markers', type: 'scatter3d', marker: { size: 6, color: 'red' }, text: labels_markers, hoverinfo: 'text', name: 'Articulaciones' };
+    const trace_lines = { x: x_lines, y: y_lines, z: z_lines, mode: 'lines', type: 'scatter3d', line: { width: 4, color: 'blue' }, name: 'Esqueleto' };
+
+    const layout = {
+        margin: {l:0, r:0, b:0, t:0},
+        scene: {
+            xaxis: {title: 'X', autorange: true},
+            yaxis: {title: 'Y', autorange: true},
+            zaxis: {title: 'Z', autorange: true},
+            aspectmode: 'cube'
+        },
+        showlegend: true
+    };
+    Plotly.newPlot('plot3d', [trace_markers, trace_lines], layout);
+}
+
+function graficarEsqueleto3D(frameData) {
+    if (!frameData || frameData.length === 0) return;
+    const x_markers = frameData.map(p => p.x);
+    const y_markers = frameData.map(p => p.y);
+    const z_markers = frameData.map(p => p.z);
+    const x_lines = [];
+    const y_lines = [];
+    const z_lines = [];
+    SKELETON_CONNECTIONS.forEach(conn => {
+        const parentCoords = getSegmentCoordinates(frameData, conn.parent);
+        const childCoords = getSegmentCoordinates(frameData, conn.child);
+        if (parentCoords && childCoords) {
+            x_lines.push(parentCoords.x, childCoords.x, null);
+            y_lines.push(parentCoords.y, childCoords.y, null);
+            z_lines.push(parentCoords.z, childCoords.z, null);
+        }
+    });
+    const update_markers = { x: [x_markers], y: [y_markers], z: [z_markers] };
+    const update_lines = { x: [x_lines], y: [y_lines], z: [z_lines] };
+    Plotly.restyle('plot3d', update_markers, [0]);
+    Plotly.restyle('plot3d', update_lines, [1]);
+}
+
+function goToFrame(index) {
+    if (index >= 0 && index < datosCompletos.length) {
+        currentFrame = index;
+        graficarEsqueleto3D(datosCompletos[currentFrame]);
+        document.getElementById('frameCounter').textContent = (currentFrame + 1) + '/' + datosCompletos.length;
+        document.getElementById('frameSlider').value = currentFrame;
+    }
+}
+
+function playAnimation() {
+    if (animationInterval) return;
+    if (datosCompletos.length === 0) return;
+    animationInterval = setInterval(() => {
+        currentFrame = (currentFrame + 1) % datosCompletos.length;
+        goToFrame(currentFrame);
+    }, 1000 / animationSpeed);
+}
+
+function pauseAnimation() {
+    if (animationInterval) {
+        clearInterval(animationInterval);
+        animationInterval = null;
+    }
+}
+
+function stopAnimation() {
+    pauseAnimation();
+    currentFrame = 0;
+    goToFrame(currentFrame);
+}
+
+function changeSpeed(speed) {
+    animationSpeed = parseFloat(speed);
+    document.getElementById('speedValue').textContent = speed + 'x';
+    if (animationInterval) {
+        pauseAnimation();
+        playAnimation();
+    }
+}
+</script>
+</body>
+</html>

@@ -24,3 +24,13 @@ class SesionResponse(BaseModel):
 
     class Config:
         orm_mode = True
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    
+class ArchivoDetalle(BaseModel):
+    nombre_archivo: str
+    usuario_nombre: str
+class UserLogin(BaseModel):
+    email: str
+    password: str
