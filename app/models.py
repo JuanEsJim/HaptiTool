@@ -87,3 +87,15 @@ class Tokens(Base):
     access_token = Column(String, unique=True, index=True)
     usuario_id = Column(Integer, ForeignKey("usuario.usuario_id"))
     usuario = relationship("Usuario")
+
+class log_sesion_user(Base):
+    __tablename__ = "log_sesion_user"
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuario.usuario_id"), nullable=False)
+    login_time = Column(DateTime, default=datetime.utcnow)
+    logout_time = Column(DateTime, nullable=True)
+
+class UserLoginCounter(Base):
+    __tablename__ = "user_login_counter"
+    id = Column(Integer, primary_key=True, default=1)
+    count = Column(Integer, default=0)

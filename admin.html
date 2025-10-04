@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <title>Panel de Administración</title>
-    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js  "></script>
     <style>
         body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #f4f4f9; color: #333; }
         .header { text-align: center; margin-bottom: 20px; }
@@ -23,6 +23,7 @@
          <p>Subida y visualización de datos de captura de movimiento</p>
          <button class="logout-btn control-btn" onclick="logout()">Cerrar Sesión</button>
         <button id="createAdminBtn" class="control-btn" style="display: none;">Crear Nuevo Administrador</button>
+        <div id="userCountDisplay" style="margin-top: 10px; font-weight: bold;">Cargando usuarios ingresados...</div>
     </div>
      <div id="createAdminForm" class="section" style="display: none;">
     <h3>Crear Nuevo Administrador</h3>
@@ -77,6 +78,11 @@
              <div id="plot3d" class="plot"></div>
      </div>
 
+    <div class="section">
+        <h2>Historial de Sesiones</h2>
+        <button class="control-btn" onclick="location.href='tabla_log.html'">Ver Historial Completo</button>
+    </div>
+
 <script>
     const API_BASE = 'http://127.0.0.1:8000';
 const createAdminForm = document.getElementById('createAdminForm');
@@ -106,8 +112,20 @@ const SKELETON_CONNECTIONS = [
 ];
 
 function logout() {
-    localStorage.removeItem('access_token');
-    window.location.href = 'login.html';
+    const token = localStorage.getItem('access_token');
+    if (!token) return;
+
+    fetch(`${API_BASE}/logout`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+    }).then(() => {
+        localStorage.removeItem('access_token');
+        window.location.href = 'login.html';
+    }).catch(err => {
+        console.error("Error al cerrar sesión:", err);
+        localStorage.removeItem('access_token');
+        window.location.href = 'login.html';
+    });
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -131,6 +149,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         if (user.rol.nombre === 'admin' || user.rol.nombre === 'super_admin') {
             cargarListaArchivos();
+            loadUserCount();  // <-- Agregamos esta línea
         }
 
         if (user.rol.nombre === 'super_admin') {
@@ -198,6 +217,20 @@ newAdminForm.addEventListener('submit', async (e) => {
         adminStatus.style.color = 'red';
     }
 });
+
+async function loadUserCount() {
+    const token = localStorage.getItem('access_token');
+    try {
+        const res = await fetch(`${API_BASE}/admin/user-count/`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const data = await res.json();
+        document.getElementById('userCountDisplay').textContent = `Usuarios ingresados: ${data.total_users}`;
+    } catch (err) {
+        console.error("Error al cargar contador de usuarios:", err);
+        document.getElementById('userCountDisplay').textContent = "No se pudo cargar el contador.";
+    }
+}
 
 async function uploadFile() {
     const fileInput = document.getElementById('fileInput');

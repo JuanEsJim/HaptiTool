@@ -10,11 +10,13 @@ from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, A
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, Column, Integer, DateTime, String, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
 from passlib.context import CryptContext
 import secrets
+from datetime import datetime
 from database import SessionLocal, engine, Base
-from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Rol, Tokens
+from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Rol, Tokens, log_sesion_user
 from schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token, ArchivoDetalle
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
@@ -83,6 +85,7 @@ def is_admin(current_user: Usuario = Depends(get_current_user)):
             detail="No tiene los permisos de administrador"
         )
     return current_user
+
 def is_super_admin(current_user: Usuario = Depends(get_current_user)):
     if current_user.rol.nombre != "super_admin":
         raise HTTPException(
@@ -120,24 +123,15 @@ class UsuarioCreate(BaseModel):
     nombre: str
     email: str
     password: str
-    
-@app.post("/register", response_model=UsuarioResponse)
-def register_user(user: UsuarioCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(Usuario).filter(Usuario.email == user.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="El email ya está registrado")
-    
-    
-    db_user = Usuario(
-        nombre=user.nombre,
-        email=user.email,
-        password_hash=hash_password(user.password),
-        rol_id=1 
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+
+# CONTADOR GLOBAL 
+
+class UserLoginCounter(Base):
+    __tablename__ = "user_login_counter"
+    id = Column(Integer, primary_key=True, default=1)
+    count = Column(Integer, default=0)
+
+
 
 @app.post("/login", response_model=Token)
 def login_for_access_token(user: UserLogin, db: Session = Depends(get_db)):
@@ -148,14 +142,82 @@ def login_for_access_token(user: UserLogin, db: Session = Depends(get_db)):
             detail="Credenciales incorrectas",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
+    # Registrar inicio de sesión
+    session_log = log_sesion_user(usuario_id=user_db.usuario_id)
+    db.add(session_log)
+    db.commit()
+    db.refresh(session_log)
+
+    # Incrementar contador de usuarios que han entrado
+    counter = db.query(UserLoginCounter).first()
+    if not counter:
+        counter = UserLoginCounter(count=1)
+        db.add(counter)
+    else:
+        counter.count += 1
+    db.commit()
+
     access_token = secrets.token_hex(32)
     db_token = Tokens(access_token=access_token, usuario_id=user_db.usuario_id)
     db.add(db_token)
     db.commit()
     db.refresh(db_token)
-    
+
     return {"access_token": access_token}
+
+@app.post("/logout")
+def logout_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    # Buscar el token
+    db_token = db.query(Tokens).filter(Tokens.access_token == token).first()
+    if not db_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido o expirado",
+        )
+
+    # Buscar la sesión más reciente sin logout_time
+    session = db.query(log_sesion_user).filter(
+        log_sesion_user.usuario_id == db_token.usuario_id,
+        log_sesion_user.logout_time == None
+    ).order_by(log_sesion_user.login_time.desc()).first()
+
+    if session:
+        session.logout_time = datetime.utcnow()
+        db.commit()
+
+    # Eliminar el token
+    db.delete(db_token)
+    db.commit()
+
+    return {"message": "Sesión cerrada correctamente"}
+
+@app.get("/admin/session-logs/")
+def get_session_logs(current_user: Usuario = Depends(is_admin), db: Session = Depends(get_db)):
+    logs = db.query(log_sesion_user).all()
+    return [
+        {
+            "id": log.id,
+            "usuario_id": log.usuario_id,
+            "login_time": log.login_time,
+            "logout_time": log.logout_time
+        }
+        for log in logs
+    ]
+
+@app.get("/admin/users/{user_id}")
+def get_user_by_id(user_id: int, db: Session = Depends(get_db), current_user: Usuario = Depends(is_admin)):
+    user = db.query(Usuario).filter(Usuario.usuario_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return {"usuario_id": user.usuario_id, "nombre": user.nombre}
+
+@app.get("/admin/user-count/", response_model=dict)
+def get_user_login_count(current_user: Usuario = Depends(is_admin), db: Session = Depends(get_db)):
+    counter = db.query(UserLoginCounter).first()
+    if not counter:
+        return {"total_users": 0}
+    return {"total_users": counter.count}
 
 @app.get("/users/me")
 def read_users_me(current_user: Usuario = Depends(get_current_user)):
@@ -277,6 +339,7 @@ def get_3d_data(nombre_archivo: str, db: Session = Depends(get_db), current_user
     )
 
     frames = defaultdict(list)
+    
     for c, nombre_segmento, frame_id in data:
         frames[frame_id].append({
             "segmento": nombre_segmento,

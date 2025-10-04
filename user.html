@@ -82,7 +82,7 @@
         window.location.href = 'login.html';
     }
 
-    async function checkAuthAndRole() {
+     async function checkAuthAndRole() {
         const token = localStorage.getItem('access_token');
         if (!token) {
             window.location.href = 'login.html';
@@ -233,7 +233,8 @@
         const layout = {
             margin: {l:0, r:0, b:0, t:0},
             scene: {
-                xaxis: {title: 'X', autorange: true},
+                xaxis: {title: 'X', autorange: true}, 
+                
                 yaxis: {title: 'Y', autorange: true},
                 zaxis: {title: 'Z', autorange: true},
                 aspectmode: 'cube'

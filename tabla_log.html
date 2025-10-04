@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Historial de Sesiones</title>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 20px; background-color: #f4f4f9; color: #333; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .section { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .control-btn { padding: 10px 15px; border: none; background-color: #007bff; color: white; border-radius: 5px; cursor: pointer; transition: background-color 0.2s; }
+        .control-btn:hover { background-color: #0056b3; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+        th { background-color: #f2f2f2; }
+        .center { text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Historial de Sesiones</h1>
+        <button class="control-btn" onclick="location.href='admin.html'">Volver al Panel</button>
+    </div>
+
+    <div class="section">
+        <button class="control-btn" onclick="loadSessionLogs()">Cargar Historial</button>
+        <div id="status"></div>
+        <table id="sessionTable">
+            <thead>
+                <tr>
+                    <th>ID Usuario</th>
+                    <th>Fecha/Hora de Entrada</th>
+                    <th>Fecha/Hora de Salida</th>
+                </tr>
+            </thead>
+            <tbody id="sessionTableBody">
+            </tbody>
+        </table>
+    </div>
+
+    <script>
+        const API_BASE = 'http://127.0.0.1:8000';
+
+        async function loadSessionLogs() {
+            const token = localStorage.getItem('access_token');
+            const statusEl = document.getElementById('status');
+            const tbody = document.getElementById('sessionTableBody');
+
+            if (!token) {
+                statusEl.textContent = 'No tienes permiso para ver esta página.';
+                return;
+            }
+
+            try {
+                statusEl.textContent = 'Cargando historial...';
+                const res = await fetch(`${API_BASE}/admin/session-logs/`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!res.ok) throw new Error('Error al cargar historial');
+
+                const logs = await res.json();
+
+                tbody.innerHTML = '';
+
+                logs.forEach(log => {
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${log.usuario_id}</td>
+                        <td>${log.login_time}</td>
+                        <td>${log.logout_time || 'Activa'}</td>
+                    `;
+                    tbody.appendChild(row);
+                });
+
+                statusEl.textContent = '';
+            } catch (err) {
+                console.error("Error al cargar historial:", err);
+                statusEl.textContent = 'Error al cargar historial.';
+            }
+        }
+
+        // Cargar automáticamente al abrir la página
+        document.addEventListener('DOMContentLoaded', () => {
+            loadSessionLogs();
+        });
+    </script>
+</body>
+</html>

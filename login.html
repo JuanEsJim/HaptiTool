@@ -61,7 +61,7 @@
             const password = document.getElementById('passwordInput').value;
             
             if (isLogin) {
-                // LOGIN
+                
                 try {
                     const res = await fetch(`${API_BASE}/login`, {
                         method: 'POST',
@@ -78,7 +78,7 @@
                     statusEl.style.display = 'block';
                 }
             } else {
-                // REGISTRO
+               
                 const nombre = document.getElementById('nombreInput').value;
                 try {
                     const res = await fetch(`${API_BASE}/register`, {
@@ -92,7 +92,7 @@
                     statusEl.textContent = 'Registro exitoso. ¡Ahora puedes iniciar sesión!';
                     statusEl.style.color = 'green';
                     statusEl.style.display = 'block';
-                    toggleForm(); // Cambiar a login
+                    toggleForm(); 
                 } catch (err) {
                     statusEl.textContent = err.message;
                     statusEl.style.color = 'red';
@@ -101,7 +101,7 @@
             }
         });
         
-        async function checkUserRole(token) {
+         async function checkUserRole(token) {
             try {
                 const res = await fetch(`${API_BASE}/users/me`, {
                     headers: { 'Authorization': `Bearer ${token}` }
