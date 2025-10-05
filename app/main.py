@@ -5,6 +5,7 @@ from collections import defaultdict
 import traceback
 import tempfile
 import os
+import re
 import json
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, APIRouter
 from fastapi.responses import JSONResponse
@@ -14,12 +15,14 @@ from sqlalchemy import create_engine, Column, Integer, DateTime, String, Foreign
 from sqlalchemy.ext.declarative import declarative_base
 from passlib.context import CryptContext
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from database import SessionLocal, engine, Base
 from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Rol, Tokens, log_sesion_user
 from schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token, ArchivoDetalle
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
+import pandas as pd
+
 
 app = FastAPI()
 
@@ -131,6 +134,30 @@ class UserLoginCounter(Base):
     id = Column(Integer, primary_key=True, default=1)
     count = Column(Integer, default=0)
 
+@app.post("/register", response_model=UsuarioResponse)
+def register_user(user: UsuarioCreate, db: Session = Depends(get_db)):
+    # Verificar si el correo ya existe
+    existing_user = db.query(Usuario).filter(Usuario.email == user.email).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El correo ya está registrado"
+        )
+
+   
+    hashed_password = pwd_context.hash(user.password)
+    new_user = Usuario(
+        nombre=user.nombre,
+        email=user.email,
+        password_hash=hashed_password,
+        rol_id=1
+    )
+
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    return new_user
 
 
 @app.post("/login", response_model=Token)
@@ -240,14 +267,21 @@ def ensure_segmento(db: Session, name: str, segmento_map: Dict[str, int]):
     base = normalize_seg_name(name)
     if not base:
         return None
+
     if base in segmento_map:
         return segmento_map[base]
+
     s = db.query(Segmento).filter_by(nombre=base).first()
     if not s:
         s = Segmento(nombre=base)
-        db.add(s); db.commit(); db.refresh(s)
+        db.add(s)
+        db.commit()
+        db.refresh(s)
+        print(f"Nuevo segmento creado: {s.nombre} (ID: {s.segmento_id})")
+    
     segmento_map[base] = s.segmento_id
     return s.segmento_id
+
     
 async def flush_batch(db: Session, frames_batch, cinem_batch, angulo_batch, contacto_batch, nueva_sesion, file_name, segmento_map, default_segmento_id):
     if not frames_batch:
@@ -341,6 +375,10 @@ def get_3d_data(nombre_archivo: str, db: Session = Depends(get_db), current_user
     frames = defaultdict(list)
     
     for c, nombre_segmento, frame_id in data:
+        
+        if nombre_archivo.endswith(".csv") and nombre_segmento == "1":
+            continue  
+        
         frames[frame_id].append({
             "segmento": nombre_segmento,
             "x": c.pos_x,
@@ -354,20 +392,16 @@ def get_3d_data(nombre_archivo: str, db: Session = Depends(get_db), current_user
 
     frames_ordenados = [frames[k] for k in sorted(frames.keys())]
     print("Frames finales cargados:", len(frames_ordenados))
-    return frames_ordenados
+    
+    
+    
+    file_type = "c3d" if nombre_archivo.endswith(".c3d") else "csv"
+    
+    return {
+        "frames": frames_ordenados,
+        "file_type": file_type
+    }
 
-@app.get("/data/2d")
-def get_2d_data(nombre_archivo: str, db: Session = Depends(get_db),current_user: Usuario = Depends(get_current_user)):
-    data = (
-        db.query(Cinematica)
-        .join(Frame, Cinematica.frame_id == Frame.frame_id)
-        .join(SesionCaptura, Frame.sesion_id == SesionCaptura.sesion_id)
-        .join(ArchivoMocap, SesionCaptura.sesion_id == ArchivoMocap.sesion_id)
-        .filter(ArchivoMocap.nombre_archivo == nombre_archivo)
-        .limit(500)
-        .all()
-    )
-    return [{"x": d.pos_x, "y": d.pos_y} for d in data]
 
 @app.get("/lista_archivos/")
 def lista_archivos(db: Session = Depends(get_db),current_user: Usuario = Depends(get_current_user)):
@@ -377,209 +411,191 @@ def lista_archivos(db: Session = Depends(get_db),current_user: Usuario = Depends
 # ---
 # ENDPOINT PARA ARCHIVOS CSV 
 # ---
+
 @app.post("/upload_csv/")
-async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: Usuario = Depends(is_admin)):
-    contents = await file.read()
-    text = contents.decode("utf-8", errors="replace")
-    reader = csv.DictReader(io.StringIO(text))
+async def upload_csv(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    import pandas as pd, io
+    from datetime import datetime, timezone
+    from fastapi import HTTPException
 
-    nueva_sesion = SesionCaptura(usuario_id=current_user.usuario_id, descripcion=f"Import {file.filename}")
-    db.add(nueva_sesion); db.commit(); db.refresh(nueva_sesion)
+    try:
+        #  Leer CSV completo 
+        contents = await file.read()
+        df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
 
-    archivo = ArchivoMocap(sesion_id=nueva_sesion.sesion_id, nombre_archivo=file.filename, ruta_archivo=file.filename)
-    db.add(archivo); db.commit(); db.refresh(archivo)
+        if df.empty:
+            raise HTTPException(status_code=400, detail="El archivo CSV está vacío")
 
-    CHUNK = 1000
-    frames_batch: List[Dict[str, Any]] = []
-    cinem_batch: List[Dict[str, Any]] = []
-    angulo_batch: List[Dict[str, Any]] = []
-    contacto_batch: List[Dict[str, Any]] = []
+        df = df.dropna(how="all").fillna(0)
 
-    segmento_map: Dict[str, int] = {}
-    frame_map: Dict[int, int] = {}  
+        # Crear nueva sesión de captura
+        nueva_sesion = SesionCaptura(
+            usuario_id=current_user.usuario_id,
+            fecha=datetime.now(timezone.utc),
+            descripcion=f"Sesión automática generada al subir {file.filename}"
+        )
+        db.add(nueva_sesion)
+        db.commit()
+        db.refresh(nueva_sesion)
 
-    default_segmento_name = "_unknown"
-    
-    default_segmento_id = ensure_segmento(db, default_segmento_name, segmento_map) 
-    
-    if default_segmento_id is None:
-        s_def = Segmento(nombre=default_segmento_name)
-        db.add(s_def); db.commit(); db.refresh(s_def)
-        default_segmento_id = s_def.segmento_id
-        segmento_map[default_segmento_name] = default_segmento_id
+        # Crear registro de archivo
+        nuevo_archivo = ArchivoMocap(
+            sesion_id=nueva_sesion.sesion_id,
+            nombre_archivo=file.filename,
+            ruta_archivo=f"/uploads/{file.filename}",
+            fecha_subida=datetime.now(timezone.utc)
+        )
+        db.add(nuevo_archivo)
+        db.commit()
+        db.refresh(nuevo_archivo)
 
-    column_mappings: Dict[str, Dict[str, Any]] = {}
-    for col in reader.fieldnames or []:
-        col_str = str(col).strip()
-        parts = col_str.split('.')
-        
-        def seg_of(p): return p.strip().lower()
-        
-        if len(parts) >= 3:
-            segment = seg_of(parts[0])
-            prop = seg_of(parts[1])
-            axis = seg_of(parts[-1])
-        
-        elif len(parts) == 2:
-            segment = seg_of(parts[0])
-            prop = seg_of(parts[1])
-            axis = None
-        else:
-            segment = None
-            prop = None
-            axis = None
-        
-        if prop in ("position", "pos", "translation"):
-            if axis == "x": target = "pos_x"
-            elif axis == "y": target = "pos_y"
-            elif axis == "z": target = "pos_z"
-            else: target = None
-            if target:
-                column_mappings[col_str] = {"type": "cinematica", "segment": segment, "target": target}
-                continue
-        if prop in ("rotation", "rot", "orientation"):
-            if axis == "w": target = "rot_w"
-            elif axis == "x": target = "rot_x"
-            elif axis == "y": target = "rot_y"
-            elif axis == "z": target = "rot_z"
-            else: target = None
-            if target:
-                column_mappings[col_str] = {"type": "cinematica", "segment": segment, "target": target}
-                continue
-        
-        if prop in ("contact", "contact_state", "contactstatus"):
-            side = axis or ""  
-            column_mappings[col_str] = {"type": "contact", "segment": segment, "side": side}
-            continue
-            
-        if prop in ("angular", "angle", "joint", "joint_angle") or (prop and prop.startswith("angular")):
-            subaxis = None
-            if prop and prop.startswith("angular_"):
-                subaxis = prop.split("_", 1)[1]
-            
-            if axis in ("v", "vel", "velocity") or subaxis in ("v", "vel", "velocity"):
-                tgt = "angular_v"
-            elif axis in ("acc", "a", "acceleration") or subaxis in ("acc", "a", "acceleration"):
-                tgt = "angular_acc"
+        #  Detectar columnas
+        columnas = df.columns
+        segmentos = sorted(set(col.split('.')[0] for col in columnas if ".position" in col or ".rotation" in col))
+        articulaciones = sorted(set(col.split('.')[0] for col in columnas if ".angle" in col))
+        contactos = [col for col in columnas if ".contact" in col]
+
+        # Crear segmentos si no existen
+        segmentos_db = {}
+        for seg in segmentos:
+            existente = db.query(Segmento).filter_by(nombre=seg).first()
+            if not existente:
+                nuevo_seg = Segmento(nombre=seg)
+                db.add(nuevo_seg)
+                db.commit()
+                db.refresh(nuevo_seg)
+                segmentos_db[seg] = nuevo_seg
             else:
-                tgt = "angle"
-            column_mappings[col_str] = {"type": "angulo", "segment": segment, "target": tgt}
-            continue
+                segmentos_db[seg] = existente
 
-        simple = col_str.lower()
-        if simple in ("pos_x","pos_y","pos_z","rot_w","rot_x","rot_y","rot_z"):
-            column_mappings[col_str] = {"type": "cinematica", "segment": None, "target": simple}
-        elif simple in ("frame_number", "frame_timestamp", "timestamp_ms", "frame_timestamp_ms"):
-            column_mappings[col_str] = {"meta": "frame"}
-        elif simple in ("left_foot_contact","right_foot_contact","left_contact","right_contact"):
-            side = "left" if "left" in simple else "right"
-            column_mappings[col_str] = {"type": "contact", "segment": None, "side": side}
-        elif simple in ("angle","angle_deg"):
-            column_mappings[col_str] = {"type": "angulo", "segment": None, "target": "angle"}
-        elif simple in ("angular_v","angular_velocity","angularvel","angvel"):
-            column_mappings[col_str] = {"type": "angulo", "segment": None, "target": "angular_v"}
-        elif simple in ("angular_acc","angular_acceleration","angacc","acceleration"):
-            column_mappings[col_str] = {"type": "angulo", "segment": None, "target": "angular_acc"}
-    
-    reader_iter = iter(reader)
-    while True:
-        try:
-            row = next(reader_iter)
-        except StopIteration:
-            break
-        except Exception as e:
-            print(f"Error reading row: {e}")
-            continue
+        #  Acumuladores para inserción masiva
+        frames_bulk = []
+        cinematica_bulk = []
+        angulos_bulk = []
+        contactos_bulk = []
 
-        try:
-            fnum = int(row.get("frame_number") or row.get("frame_number".lower()) or "0")
-        except (ValueError, TypeError):
-            continue
+        # Recorrer frames
+        for _, row in df.iterrows():
+            frame = Frame(
+                sesion_id=nueva_sesion.sesion_id,
+                frame_number=int(row.get("frame_number", 0)),
+                timestamp_ms=int(row.get("frame_timestamp", 0))
+            )
+            frames_bulk.append(frame)
 
-        frames_batch.append({
+        # Guardar todos los frames primero
+        db.bulk_save_objects(frames_bulk)
+        db.commit()
+
+        # Obtener los IDs asignados a los frames
+        frames_guardados = (
+            db.query(Frame)
+            .filter(Frame.sesion_id == nueva_sesion.sesion_id)
+            .order_by(Frame.frame_id)
+            .all()
+        )
+
+        #  Generar registros secundarios (cinemática, ángulos, contactos)
+        for idx, (_, row) in enumerate(df.iterrows()):
+            frame_id = frames_guardados[idx].frame_id
+
+            # Cinemática
+            for seg in segmentos:
+                cinematica_bulk.append(
+                Cinematica(
+                frame_id=frame_id,
+                segmento_id=segmentos_db[seg].segmento_id,
+                pos_x=float(row.get(f"{seg}.position.x", 0)),
+                pos_y=float(row.get(f"{seg}.position.y", 0)),
+                pos_z=float(row.get(f"{seg}.position.z", 0)),
+                rot_w=float(row.get(f"{seg}.rotation.w", 0)),
+                rot_x=float(row.get(f"{seg}.rotation.x", 0)),
+                rot_y=float(row.get(f"{seg}.rotation.y", 0)),
+                rot_z=float(row.get(f"{seg}.rotation.z", 0))
+                )
+            )
+
+
+            # Ángulos articulares
+            for joint in articulaciones:
+                angle = getattr(row, f"{joint}.angle", None)
+                angular_v = getattr(row, f"{joint}.angular_v", None)
+                angular_acc = getattr(row, f"{joint}.angular_acc", None)
+
+                if pd.notna(angle) or pd.notna(angular_v) or pd.notna(angular_acc):
+                    angulos_bulk.append(
+                        AnguloArticular(
+                            frame_id=frame_id,
+                            joint_name=joint,
+                            angle=float(angle) if pd.notna(angle) else 0.0,
+                            angular_v=float(angular_v) if pd.notna(angular_v) else 0.0,
+                            angular_acc=float(angular_acc) if pd.notna(angular_acc) else 0.0
+                        )
+                    )
+
+            # Contactos
+            if contactos:
+                contactos_bulk.append(
+                    Contacto(
+                        frame_id=frame_id,
+                        left_foot_contact=bool(getattr(row, "left_foot.contact", 0)),
+                        right_foot_contact=bool(getattr(row, "right_foot.contact", 0))
+                    )
+                )
+
+        # Inserciones masivas
+        if cinematica_bulk:
+            db.bulk_save_objects(cinematica_bulk)
+        if angulos_bulk:
+            db.bulk_save_objects(angulos_bulk)
+        if contactos_bulk:
+            db.bulk_save_objects(contactos_bulk)
+
+        db.commit()
+
+        return {
+            "message": " CSV procesado y guardado correctamente (optimizado)",
+            "archivo_id": nuevo_archivo.archivo_id,
             "sesion_id": nueva_sesion.sesion_id,
-            "frame_number": fnum,
-            "timestamp_ms": int(float(row.get("Time") or "0") * 1000) if row.get("Time") else fnum
-        })
+            "frames_insertados": len(frames_bulk),
+            "segmentos": len(segmentos),
+            "articulaciones": len(articulaciones),
+        }
 
-        seg_values: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"pos_x": None, "pos_y": None, "pos_z": None, "rot_w": None, "rot_x": None, "rot_y": None, "rot_z": None})
-        contact_vals: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"left": None, "right": None}) 
-        ang_vals: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"angle": None, "angular_v": None, "angular_acc": None})
-        
-        for col_name, meta in column_mappings.items():
-            raw = row.get(col_name)
-            if raw is None or raw == "" or meta.get("meta") == "frame":
-                continue
-            
-            try:
-                mtype = meta.get("type")
-                if mtype == "cinematica":
-                    seg = normalize_seg_name(meta.get("segment") or "") or default_segmento_name
-                    target = meta.get("target")
-                    if target:
-                        seg_values[seg][target] = float(raw)
-                elif mtype == "contact":
-                    seg = normalize_seg_name(meta.get("segment") or "") or default_segmento_name
-                    side = meta.get("side") or ""
-                    val = None
-                    try: val = bool(int(raw))
-                    except (ValueError, TypeError):
-                        if str(raw).lower() in ("true","1","yes","y"): val = True
-                        elif str(raw).lower() in ("false","0","no","n"): val = False
-                    
-                    if "left" in side: contact_vals[seg]["left"] = val
-                    elif "right" in side: contact_vals[seg]["right"] = val
-                    else:
-                        if "left" in seg: contact_vals[seg]["left"] = val
-                        elif "right" in seg: contact_vals[seg]["right"] = val
-                elif mtype == "angulo":
-                    seg = normalize_seg_name(meta.get("segment") or "") or default_segmento_name
-                    target = meta.get("target")
-                    if target:
-                        ang_vals[seg][target] = float(raw)
-            except (ValueError, TypeError):
-                continue
+    except Exception as e:
+        db.rollback()
+        print(" Error al procesar CSV:", e)
+        raise HTTPException(status_code=500, detail=f"Error al procesar CSV: {str(e)}")
 
-        for seg_name, vals in seg_values.items():
-            seg_id = ensure_segmento(db, seg_name, segmento_map) or default_segmento_id
-            cinem_batch.append({
-                "frame_number": fnum, "segmento_id": seg_id, "pos_x": vals.get("pos_x"), "pos_y": vals.get("pos_y"),
-                "pos_z": vals.get("pos_z"), "rot_w": vals.get("rot_w", 0), "rot_x": vals.get("rot_x", 0),
-                "rot_y": vals.get("rot_y", 0), "rot_z": vals.get("rot_z", 0),
-            })
 
-        for seg_name, vals in ang_vals.items():
-            if any(v is not None for v in vals.values()):
-                angulo_batch.append({
-                    "frame_number": fnum, "joint_name": seg_name, "angle": vals.get("angle"),
-                    "angular_v": vals.get("angular_v"), "angular_acc": vals.get("angular_acc")
-                })
-        
-        combined_left, combined_right = None, None
-        for seg_name, vals in contact_vals.items():
-            if vals.get("left") is not None: combined_left = vals["left"]
-            if vals.get("right") is not None: combined_right = vals["right"]
-        if combined_left is not None or combined_right is not None:
-            contacto_batch.append({
-                "frame_number": fnum, "left_foot_contact": combined_left, "right_foot_contact": combined_right
-            })
-
-        if len(frames_batch) >= CHUNK:
-            await flush_batch(db, frames_batch, cinem_batch, angulo_batch, contacto_batch, nueva_sesion, file.filename, segmento_map, default_segmento_id)
-            frames_batch, cinem_batch, angulo_batch, contacto_batch = [], [], [], []
-    
-    if frames_batch:
-        await flush_batch(db, frames_batch, cinem_batch, angulo_batch, contacto_batch, nueva_sesion, file.filename, segmento_map, default_segmento_id)
-
-    return JSONResponse({"status": "ok", "sesion_id": nueva_sesion.sesion_id})
-
-# ---
-# ENDPOINT PARA ARCHIVOS C3D
-# ---
+# ============================================================
+#  ENDPOINT: Subir archivo C3D
+# ============================================================
 @app.post("/upload_c3d/")
-async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: Usuario = Depends(is_admin)):
+async def upload_c3d(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(is_admin)
+):
+    filename = file.filename.lower()
+    if not filename.endswith(".c3d"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Solo se permiten archivos con extensión .c3d"
+        )
+
+    existing = db.query(ArchivoMocap).filter(ArchivoMocap.nombre_archivo == file.filename).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"El archivo '{file.filename}' ya fue subido anteriormente."
+        )
+
     contents = await file.read()
-    
     with tempfile.NamedTemporaryFile(delete=False, suffix=".c3d") as temp_file:
         temp_file.write(contents)
         temp_file_path = temp_file.name
@@ -588,10 +604,10 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         c3d = ezc3d.c3d(temp_file_path)
     except Exception as e:
         os.unlink(temp_file_path)
-        return JSONResponse({"status": "error", "message": f"Error al leer el archivo C3D: {e}"}, status_code=400)
+        raise HTTPException(status_code=400, detail=f"Error al leer el archivo C3D: {e}")
     finally:
         os.unlink(temp_file_path)
-    
+
     nueva_sesion = SesionCaptura(usuario_id=current_user.usuario_id, descripcion=f"Import {file.filename}")
     db.add(nueva_sesion); db.commit(); db.refresh(nueva_sesion)
 
@@ -618,10 +634,7 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
         })
 
         for i, label in enumerate(puntos_labels):
-            pos_x = puntos_datos[0, i, frame_number]
-            pos_y = puntos_datos[1, i, frame_number]
-            pos_z = puntos_datos[2, i, frame_number]
-
+            pos_x, pos_y, pos_z = puntos_datos[0, i, frame_number], puntos_datos[1, i, frame_number], puntos_datos[2, i, frame_number]
             if not (pos_x == 0 and pos_y == 0 and pos_z == 0):
                 cinem_batch.append({
                     "frame_number": frame_number,
@@ -632,32 +645,12 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                 })
 
         if len(frames_batch) >= CHUNK:
-            await flush_batch(db, frames_batch, cinem_batch, [], [], nueva_sesion, file.filename, segmento_map, default_segmento_id)
-            frames_batch = []
-            cinem_batch = []
-            
+            await flush_batch(db, frames_batch, cinem_batch, [], [], nueva_sesion,
+                              file.filename, segmento_map, default_segmento_id)
+            frames_batch, cinem_batch = [], []
+
     if frames_batch:
-        await flush_batch(db, frames_batch, cinem_batch, [], [], nueva_sesion, file.filename, segmento_map, default_segmento_id)
+        await flush_batch(db, frames_batch, cinem_batch, [], [], nueva_sesion,
+                          file.filename, segmento_map, default_segmento_id)
 
     return JSONResponse({"status": "ok", "sesion_id": nueva_sesion.sesion_id})
-
-@app.get("/data/angles")
-def get_angles(nombre_archivo: str, db: Session = Depends(get_db), current_user: Usuario = Depends(get_current_user)):
-    rows = db.query(AnguloArticular, Frame.frame_number).\
-        join(Frame, AnguloArticular.frame_id == Frame.frame_id).\
-        join(ArchivoMocap, ArchivoMocap.sesion_id == Frame.sesion_id).\
-        filter(ArchivoMocap.nombre_archivo == nombre_archivo).all()
-
-    out: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for ang, frame_number in rows:
-        jn = getattr(ang, "joint_name", None) or "unknown"
-        out[jn].append({
-            "frame_number": frame_number,
-            "angle": getattr(ang, "angle", None),
-            "angular_v": getattr(ang, "angular_v", None),
-            "angular_acc": getattr(ang, "angular_acc", None)
-        })
-    
-    for jn in out:
-        out[jn].sort(key=lambda r: (r["frame_number"] or 0))
-    return out
