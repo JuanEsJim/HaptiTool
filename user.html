@@ -80,13 +80,21 @@
         <button class="logout-btn control-btn" onclick="logout()">Cerrar Sesión</button>
     </div>
 
-    <div class="section">
-        <h2>Seleccionar archivo para visualizar</h2>
-        <select id="archivoSelect" onchange="cargarDatos(this.value)">
-            <option value="">Selecciona un archivo...</option>
-        </select>
+       <div class="section">
+        <h2>Visualizar Datos</h2>
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+            <input type="text" id="searchInput" placeholder="Buscar archivo..." style="padding: 8px; width: 200px;">
+            <select id="fileTypeFilter">
+                <option value="">Todos los tipos</option>
+                <option value="csv">Solo CSV</option>
+                <option value="c3d">Solo C3D</option>
+            </select>
+        </div>
+        <select id="archivoSelect" onchange="cargarDatos(this.value)" >
+            <option value="" >Selecciona un archivo...</option>
+         </select>
         <div id="status"></div>
-    </div>
+     </div>
 
     <div class="section controls" id="animationControls" style="display: none;">
         <button onclick="playAnimation()" id="playBtn" class="control-btn">▶ Reproducir</button>
@@ -221,9 +229,46 @@
                 window.location.href = 'login.html';
             }
         }
+        let archivosOriginales = []; // Almacenar la lista completa de archivos
 
-        async function cargarListaArchivos() {
+        function filtrarArchivos() {
+            const searchValue = document.getElementById('searchInput').value.toLowerCase();
+            const fileTypeFilter = document.getElementById('fileTypeFilter').value;
+
+            let filteredArchivos = archivosOriginales.filter(nombre => {
+                // Filtrar por tipo de archivo
+                if (fileTypeFilter) {
+                    const ext = nombre.toLowerCase().split('.').pop();
+                    if (ext !== fileTypeFilter) {
+                        return false;
+                    }
+                }
+
+                // Filtrar por nombre (búsqueda parcial)
+                if (searchValue) {
+                    if (!nombre.toLowerCase().includes(searchValue)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+
+            // Actualizar el select con los archivos filtrados
             const select = document.getElementById('archivoSelect');
+            select.innerHTML = '<option value="">Selecciona un archivo...</option>';
+            filteredArchivos.forEach(nombre => {
+                const option = document.createElement('option');
+                option.value = nombre;
+                option.textContent = nombre;
+                select.appendChild(option);
+            });
+        }
+
+        // Agregar listeners a los controles de filtrado
+        document.getElementById('searchInput').addEventListener('input', filtrarArchivos);
+        document.getElementById('fileTypeFilter').addEventListener('change', filtrarArchivos);
+        async function cargarListaArchivos() {
             const statusEl = document.getElementById('status');
             const token = localStorage.getItem('access_token');
             statusEl.textContent = 'Cargando lista de archivos...';
@@ -232,14 +277,9 @@
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 if (!res.ok) throw new Error('Error al obtener la lista');
-                const archivos = await res.json();
-                select.innerHTML = '<option value="">Selecciona un archivo...</option>';
-                archivos.forEach(nombre => {
-                    const option = document.createElement('option');
-                    option.value = nombre;
-                    option.textContent = nombre;
-                    select.appendChild(option);
-                });
+                archivosOriginales = await res.json(); // Guardar la lista original
+
+                filtrarArchivos(); // Aplicar el filtro inicial (mostrar todos)
                 statusEl.textContent = '';
             } catch (err) {
                 console.error('Error al cargar lista de archivos:', err);
@@ -347,10 +387,10 @@
 
             const trace_markers = {
                 x: x_markers, y: y_markers, z: z_markers,
-                mode: 'markers+text', // 👈 muestra puntos + texto
+                mode: 'markers',
                 type: 'scatter3d',
                 marker: { size: 6, color: 'red' },
-                text: labels_markers, // 👈 texto sobre los puntos
+                text: labels_markers,
                 textposition: 'top center',
                 hoverinfo: 'text',
                 name: 'Articulaciones'

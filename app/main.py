@@ -1,27 +1,24 @@
-import io, time, csv, ezc3d
-from io import BytesIO
+import ezc3d
 from typing import List, Dict, Any
 from collections import defaultdict
-import traceback
 import tempfile
 import os
-import re
-import json
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, APIRouter
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine, Column, Integer, DateTime, String, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, Integer
 from passlib.context import CryptContext
 import secrets
 from datetime import datetime, timezone
 from database import SessionLocal, engine, Base
-from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Rol, Tokens, log_sesion_user
-from schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token, ArchivoDetalle
+from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Tokens, log_sesion_user
+from schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-import pandas as pd
+import pandas as pd, io
+from datetime import datetime, timezone
+from fastapi import HTTPException
 
 
 app = FastAPI()
@@ -418,9 +415,7 @@ async def upload_csv(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    import pandas as pd, io
-    from datetime import datetime, timezone
-    from fastapi import HTTPException
+    
 
     try:
         #  Leer CSV completo 

@@ -1,22 +1,80 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="utf-8" />
     <title>Acceso al Sistema</title>
     <style>
-        body { font-family: sans-serif; margin: 0; padding: 40px; background-color: #f4f4f9; color: #333; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .container { background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 100%; max-width: 400px; text-align: center; }
-        h1 { color: #007bff; margin-top: 0; }
-        input[type="email"], input[type="password"], input[type="text"], button {
-            width: calc(100% - 20px); padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box;
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            padding: 40px;
+            background-color: #f4f4f9;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
         }
-        button { background-color: #007bff; color: white; border: none; cursor: pointer; transition: background-color 0.2s; }
-        button:hover { background-color: #0056b3; }
-        .toggle-form { margin-top: 20px; font-size: 14px; }
-        .error-message { color: red; margin-bottom: 15px; display: none; }
-        .success-message { color: green; margin-bottom: 15px; display: none; }
+
+        .container {
+            background: #fff;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+        }
+
+        h1 {
+            color: #007bff;
+            margin-top: 0;
+        }
+
+        input[type="email"],
+        input[type="password"],
+        input[type="text"],
+        button {
+            width: calc(100% - 20px);
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        .toggle-form {
+            margin-top: 20px;
+            font-size: 14px;
+        }
+
+        .error-message {
+            color: red;
+            margin-bottom: 15px;
+            display: none;
+        }
+
+        .success-message {
+            color: green;
+            margin-bottom: 15px;
+            display: none;
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1 id="form-title">Iniciar Sesión</h1>
@@ -56,12 +114,12 @@
             e.preventDefault();
             statusEl.style.display = 'none';
             statusEl.textContent = '';
-            
+
             const email = document.getElementById('emailInput').value;
             const password = document.getElementById('passwordInput').value;
-            
+
             if (isLogin) {
-                
+
                 try {
                     const res = await fetch(`${API_BASE}/login`, {
                         method: 'POST',
@@ -70,7 +128,7 @@
                     });
                     const data = await res.json();
                     if (!res.ok) throw new Error(data.detail || 'Credenciales incorrectas');
-                    
+
                     localStorage.setItem('access_token', data.access_token);
                     await checkUserRole(data.access_token);
                 } catch (err) {
@@ -78,7 +136,7 @@
                     statusEl.style.display = 'block';
                 }
             } else {
-               
+
                 const nombre = document.getElementById('nombreInput').value;
                 try {
                     const res = await fetch(`${API_BASE}/register`, {
@@ -92,7 +150,7 @@
                     statusEl.textContent = 'Registro exitoso. ¡Ahora puedes iniciar sesión!';
                     statusEl.style.color = 'green';
                     statusEl.style.display = 'block';
-                    toggleForm(); 
+                    toggleForm();
                 } catch (err) {
                     statusEl.textContent = err.message;
                     statusEl.style.color = 'red';
@@ -100,8 +158,8 @@
                 }
             }
         });
-        
-         async function checkUserRole(token) {
+
+        async function checkUserRole(token) {
             try {
                 const res = await fetch(`${API_BASE}/users/me`, {
                     headers: { 'Authorization': `Bearer ${token}` }
@@ -113,7 +171,7 @@
                 }
 
                 const user = await res.json();
-                
+
                 if (user.rol.nombre === 'admin' || user.rol.nombre === 'super_admin') {
                     window.location.href = 'admin.html';
                 } else {
@@ -130,4 +188,5 @@
         }
     </script>
 </body>
+
 </html>
