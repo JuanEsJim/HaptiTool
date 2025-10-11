@@ -19,6 +19,7 @@ from pydantic import BaseModel
 import pandas as pd, io
 from datetime import datetime, timezone
 from fastapi import HTTPException
+from fastapi.responses import FileResponse
 
 
 app = FastAPI()
@@ -77,7 +78,222 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
     return user
 
+async def procesar_csv(file: UploadFile, db: Session, current_user: Usuario, sesion_id: int):
+    """
+    Procesa un archivo CSV y guarda los datos en la base de datos.
+    Reutiliza la lógica del endpoint /upload_csv/.
+    """
+    try:
+        # Leer CSV completo
+        contents = await file.read()
+        df = pd.read_csv(io.StringIO(contents.decode("utf-8")))
 
+        if df.empty:
+            raise HTTPException(status_code=400, detail="El archivo CSV está vacío")
+
+        df = df.dropna(how="all").fillna(0)
+
+        # Crear nueva sesión de captura (ya se pasa como parámetro)
+        nueva_sesion = db.query(SesionCaptura).filter(SesionCaptura.sesion_id == sesion_id).first()
+        if not nueva_sesion:
+            raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+        # Crear registro de archivo (ya se pasa como parámetro)
+        nuevo_archivo = db.query(ArchivoMocap).filter(ArchivoMocap.sesion_id == sesion_id).first()
+        if not nuevo_archivo:
+            raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+        # Detectar columnas
+        columnas = df.columns
+        segmentos = sorted(set(col.split('.')[0] for col in columnas if ".position" in col or ".rotation" in col))
+        articulaciones = sorted(set(col.split('.')[0] for col in columnas if ".angle" in col))
+        contactos = [col for col in columnas if ".contact" in col]
+
+        # Crear segmentos si no existen
+        segmentos_db = {}
+        for seg in segmentos:
+            existente = db.query(Segmento).filter_by(nombre=seg).first()
+            if not existente:
+                nuevo_seg = Segmento(nombre=seg)
+                db.add(nuevo_seg)
+                db.commit()
+                db.refresh(nuevo_seg)
+                segmentos_db[seg] = nuevo_seg
+            else:
+                segmentos_db[seg] = existente
+
+        # Acumuladores para inserción masiva
+        frames_bulk = []
+        cinematica_bulk = []
+        angulos_bulk = []
+        contactos_bulk = []
+
+        # Recorrer frames
+        for _, row in df.iterrows():
+            frame = Frame(
+                sesion_id=nueva_sesion.sesion_id,
+                frame_number=int(row.get("frame_number", 0)),
+                timestamp_ms=int(row.get("frame_timestamp", 0))
+            )
+            frames_bulk.append(frame)
+
+        # Guardar todos los frames primero
+        db.bulk_save_objects(frames_bulk)
+        db.commit()
+
+        # Obtener los IDs asignados a los frames
+        frames_guardados = (
+            db.query(Frame)
+            .filter(Frame.sesion_id == nueva_sesion.sesion_id)
+            .order_by(Frame.frame_id)
+            .all()
+        )
+
+        # Generar registros secundarios (cinemática, ángulos, contactos)
+        for idx, (_, row) in enumerate(df.iterrows()):
+            frame_id = frames_guardados[idx].frame_id
+
+            # Cinemática
+            for seg in segmentos:
+                cinematica_bulk.append(
+                    Cinematica(
+                        frame_id=frame_id,
+                        segmento_id=segmentos_db[seg].segmento_id,
+                        pos_x=float(row.get(f"{seg}.position.x", 0)),
+                        pos_y=float(row.get(f"{seg}.position.y", 0)),
+                        pos_z=float(row.get(f"{seg}.position.z", 0)),
+                        rot_w=float(row.get(f"{seg}.rotation.w", 0)),
+                        rot_x=float(row.get(f"{seg}.rotation.x", 0)),
+                        rot_y=float(row.get(f"{seg}.rotation.y", 0)),
+                        rot_z=float(row.get(f"{seg}.rotation.z", 0))
+                    )
+                )
+
+            # Ángulos articulares
+            for joint in articulaciones:
+                angle = row.get(f"{joint}.angle", None)
+                angular_v = row.get(f"{joint}.angular_v", None)
+                angular_acc = row.get(f"{joint}.angular_acc", None)
+
+                if pd.notna(angle) or pd.notna(angular_v) or pd.notna(angular_acc):
+                    angulos_bulk.append(
+                        AnguloArticular(
+                            frame_id=frame_id,
+                            joint_name=joint,
+                            angle=float(angle) if pd.notna(angle) else 0.0,
+                            angular_v=float(angular_v) if pd.notna(angular_v) else 0.0,
+                            angular_acc=float(angular_acc) if pd.notna(angular_acc) else 0.0
+                        )
+                    )
+
+            # Contactos
+            if contactos:
+                contactos_bulk.append(
+                    Contacto(
+                        frame_id=frame_id,
+                        left_foot_contact=bool(row.get("left_foot.contact", 0)),
+                        right_foot_contact=bool(row.get("right_foot.contact", 0))
+                    )
+                )
+
+        # Inserciones masivas
+        if cinematica_bulk:
+            db.bulk_save_objects(cinematica_bulk)
+        if angulos_bulk:
+            db.bulk_save_objects(angulos_bulk)
+        if contactos_bulk:
+            db.bulk_save_objects(contactos_bulk)
+
+        db.commit()
+
+        return {
+            "message": "CSV procesado y guardado correctamente (optimizado)",
+            "archivo_id": nuevo_archivo.archivo_id,
+            "sesion_id": nueva_sesion.sesion_id,
+            "frames_insertados": len(frames_bulk),
+            "segmentos": len(segmentos),
+            "articulaciones": len(articulaciones),
+        }
+
+    except Exception as e:
+        db.rollback()
+        print("Error al procesar CSV:", e)
+        raise HTTPException(status_code=500, detail=f"Error al procesar CSV: {str(e)}")
+
+
+async def procesar_c3d(file: UploadFile, db: Session, current_user: Usuario, sesion_id: int):
+    """
+    Procesa un archivo C3D y guarda los datos en la base de datos.
+    Reutiliza la lógica del endpoint /upload_c3d/.
+    """
+    filename = file.filename.lower()
+    if not filename.endswith(".c3d"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Solo se permiten archivos con extensión .c3d"
+        )
+
+    contents = await file.read()
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".c3d") as temp_file:
+        temp_file.write(contents)
+        temp_file_path = temp_file.name
+
+    try:
+        c3d = ezc3d.c3d(temp_file_path)
+    except Exception as e:
+        os.unlink(temp_file_path)
+        raise HTTPException(status_code=400, detail=f"Error al leer el archivo C3D: {e}")
+    finally:
+        os.unlink(temp_file_path)
+
+    nueva_sesion = db.query(SesionCaptura).filter(SesionCaptura.sesion_id == sesion_id).first()
+    if not nueva_sesion:
+        raise HTTPException(status_code=404, detail="Sesión no encontrada")
+
+    archivo = db.query(ArchivoMocap).filter(ArchivoMocap.sesion_id == sesion_id).first()
+    if not archivo:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    CHUNK = 1000
+    frames_batch: List[Dict[str, Any]] = []
+    cinem_batch: List[Dict[str, Any]] = []
+    
+    puntos_labels = c3d['parameters']['POINT']['LABELS']['value']
+    puntos_datos = c3d['data']['points']
+    num_frames = puntos_datos.shape[2]
+    
+    segmento_map: Dict[str, int] = {}
+    default_segmento_name = "_unknown"
+    default_segmento_id = ensure_segmento(db, default_segmento_name, segmento_map)
+
+    for frame_number in range(num_frames):
+        frames_batch.append({
+            "sesion_id": nueva_sesion.sesion_id,
+            "frame_number": frame_number,
+            "timestamp_ms": int(frame_number / c3d['parameters']['POINT']['RATE']['value'][0] * 1000)
+        })
+
+        for i, label in enumerate(puntos_labels):
+            pos_x, pos_y, pos_z = puntos_datos[0, i, frame_number], puntos_datos[1, i, frame_number], puntos_datos[2, i, frame_number]
+            if not (pos_x == 0 and pos_y == 0 and pos_z == 0):
+                cinem_batch.append({
+                    "frame_number": frame_number,
+                    "segment_name": label,
+                    "pos_x": float(pos_x),
+                    "pos_y": float(pos_y),
+                    "pos_z": float(pos_z)
+                })
+
+        if len(frames_batch) >= CHUNK:
+            await flush_batch(db, frames_batch, cinem_batch, [], [], nueva_sesion,
+                              file.filename, segmento_map, default_segmento_id)
+            frames_batch, cinem_batch = [], []
+
+    if frames_batch:
+        await flush_batch(db, frames_batch, cinem_batch, [], [], nueva_sesion,
+                          file.filename, segmento_map, default_segmento_id)
+
+    return JSONResponse({"status": "ok", "sesion_id": nueva_sesion.sesion_id})
 def is_admin(current_user: Usuario = Depends(get_current_user)):
     if current_user.rol.nombre != "admin" and current_user.rol.nombre != "super_admin":
         raise HTTPException(
@@ -398,13 +614,177 @@ def get_3d_data(nombre_archivo: str, db: Session = Depends(get_db), current_user
         "frames": frames_ordenados,
         "file_type": file_type
     }
+@app.delete("/archivo/{nombre_archivo}")
+def eliminar_archivo(nombre_archivo: str, db: Session = Depends(get_db), current_user: Usuario = Depends(is_admin)):
+    # Buscar el archivo
+    archivo = db.query(ArchivoMocap).filter(ArchivoMocap.nombre_archivo == nombre_archivo).first()
+    if not archivo:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
+    sesion_id = archivo.sesion_id
+    CHUNK_SIZE = 1000  # Tamaño del bloque
+
+    try:
+        # --- ELIMINACIÓN DE DATOS RELACIONADOS (YA ESTABA BIEN) ---
+
+        # 1. Eliminar Contactos en bloques
+        while True:
+            subquery = db.query(Contacto.contacto_id).join(Frame).filter(Frame.sesion_id == sesion_id).limit(CHUNK_SIZE).subquery()
+            result = db.query(Contacto).filter(Contacto.contacto_id.in_(subquery)).delete(synchronize_session=False)
+            db.commit()
+            if result == 0:
+                break
+
+        # 2. Eliminar Ángulos Articulares en bloques
+        while True:
+            subquery = db.query(AnguloArticular.angulo_id).join(Frame).filter(Frame.sesion_id == sesion_id).limit(CHUNK_SIZE).subquery()
+            result = db.query(AnguloArticular).filter(AnguloArticular.angulo_id.in_(subquery)).delete(synchronize_session=False)
+            db.commit()
+            if result == 0:
+                break
+
+        # 3. Eliminar Cinemática en bloques
+        while True:
+            subquery = db.query(Cinematica.cinematica_id).join(Frame).filter(Frame.sesion_id == sesion_id).limit(CHUNK_SIZE).subquery()
+            result = db.query(Cinematica).filter(Cinematica.cinematica_id.in_(subquery)).delete(synchronize_session=False)
+            db.commit()
+            if result == 0:
+                break
+
+        # 4. Eliminar Frames en bloques
+        while True:
+            subquery = db.query(Frame.frame_id).filter(Frame.sesion_id == sesion_id).limit(CHUNK_SIZE).subquery()
+            result = db.query(Frame).filter(Frame.frame_id.in_(subquery)).delete(synchronize_session=False)
+            db.commit()
+            if result == 0:
+                break
+
+        # --- ELIMINACIÓN DEL ARCHIVO FÍSICO Y REGISTROS DE LA BASE DE DATOS (CORREGIDO) ---
+
+        # 5. Eliminar el archivo físico si existe
+        if os.path.exists(archivo.ruta_archivo):
+            try:
+                os.remove(archivo.ruta_archivo)
+                print(f"Archivo físico eliminado: {archivo.ruta_archivo}") # Opcional: log
+            except OSError as e:
+                # Manejar el caso en que el archivo no se pueda eliminar (permisos, etc.)
+                print(f"Advertencia: No se pudo eliminar el archivo físico {archivo.ruta_archivo}: {e}")
+                # Puedes decidir si esto debe ser un error grave o no.
+                # Por ahora, continuamos eliminando los registros.
+
+        # 6. ***ELIMINAR EL REGISTRO DE LA BASE DE DATOS SIEMPRE***
+        #    Esto debe suceder independientemente de si el archivo físico existía.
+        db.delete(archivo)
+        db.commit()  # Confirmar eliminación del registro del archivo
+
+        # 7. ***ELIMINAR LA SESIÓN DE CAPTURA SIEMPRE***
+        #    Ahora que el archivo ya no existe, esta operación no fallará por FK.
+        db.query(SesionCaptura).filter(SesionCaptura.sesion_id == sesion_id).delete(synchronize_session=False)
+        db.commit()
+
+        return {"message": f"Archivo '{nombre_archivo}' y todos sus datos relacionados han sido eliminados correctamente"}
+
+    except Exception as e:
+        db.rollback()
+        print(f"Error detallado al eliminar '{nombre_archivo}': {e}") # Log del error
+        raise HTTPException(status_code=500, detail=f"Error al eliminar archivo: {str(e)}")
+
+
+@app.put("/archivo/{nombre_archivo}")
+async def actualizar_archivo(nombre_archivo: str, file: UploadFile = File(...), db: Session = Depends(get_db), current_user: Usuario = Depends(is_admin)):
+    # Verificar si el archivo existe
+    archivo_existente = db.query(ArchivoMocap).filter(ArchivoMocap.nombre_archivo == nombre_archivo).first()
+    if not archivo_existente:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    # Verificar que el tipo del nuevo archivo coincida con el existente
+    extension_existente = nombre_archivo.lower().split('.')[-1]
+    extension_nueva = file.filename.lower().split('.')[-1]
+
+    if extension_existente != extension_nueva:
+        raise HTTPException(status_code=400, detail=f"Tipo de archivo incorrecto. Se esperaba .{extension_existente}, se recibió .{extension_nueva}")
+
+    sesion_id = archivo_existente.sesion_id
+
+    try:
+        # --- ELIMINAR DATOS ANTIGUOS DE UNA SOLA VEZ ---
+        # 1. Eliminar Contactos relacionados con la sesión
+        db.query(Contacto).filter(
+            Contacto.frame_id.in_(
+                db.query(Frame.frame_id).filter(Frame.sesion_id == sesion_id)
+            )
+        ).delete(synchronize_session=False)
+
+        # 2. Eliminar Ángulos Articulares relacionados con la sesión
+        db.query(AnguloArticular).filter(
+            AnguloArticular.frame_id.in_(
+                db.query(Frame.frame_id).filter(Frame.sesion_id == sesion_id)
+            )
+        ).delete(synchronize_session=False)
+
+        # 3. Eliminar Cinemática relacionada con la sesión
+        db.query(Cinematica).filter(
+            Cinematica.frame_id.in_(
+                db.query(Frame.frame_id).filter(Frame.sesion_id == sesion_id)
+            )
+        ).delete(synchronize_session=False)
+
+        # 4. Eliminar Frames relacionados con la sesión
+        db.query(Frame).filter(Frame.sesion_id == sesion_id).delete(synchronize_session=False)
+
+        db.commit() # Confirmar eliminación de datos relacionados
+
+        # --- GUARDAR Y ACTUALIZAR EL NUEVO ARCHIVO ---
+        ruta_nueva = f"uploads/{file.filename}"  # Ajusta esta ruta según tu estructura
+        os.makedirs(os.path.dirname(ruta_nueva), exist_ok=True)
+
+        # Guardar nuevo archivo
+        with open(ruta_nueva, "wb") as f:
+            f.write(await file.read())
+
+        # Actualizar registro en la base de datos
+        archivo_existente.nombre_archivo = file.filename
+        archivo_existente.ruta_archivo = ruta_nueva
+        archivo_existente.fecha_subida = datetime.utcnow()
+        db.commit()
+
+        # --- PROCESAR NUEVO ARCHIVO ---
+        # Aquí llamas a la función de procesamiento correspondiente
+        # Ejemplo (ajusta según tus funciones reales):
+        # if extension_nueva == "c3d":
+        #     await procesar_c3d(file, db, current_user, sesion_id)
+        # elif extension_nueva == "csv":
+        #     await procesar_csv(file, db, current_user, sesion_id)
+
+        return {"message": f"Archivo '{nombre_archivo}' actualizado correctamente. Los datos antiguos han sido eliminados."}
+
+    except Exception as e:
+        db.rollback()
+        print(f"Error detallado al actualizar '{nombre_archivo}': {e}") # Log del error
+        raise HTTPException(status_code=500, detail=f"Error al actualizar archivo: {str(e)}")
 
 @app.get("/lista_archivos/")
 def lista_archivos(db: Session = Depends(get_db),current_user: Usuario = Depends(get_current_user)):
     archivos = db.query(ArchivoMocap.nombre_archivo).distinct().all()
     return [a[0] for a in archivos if a[0] is not None]
 
+@app.get("/download/{filename}")
+def download_file(filename: str, db: Session = Depends(get_db), current_user: Usuario = Depends(get_current_user)):
+    archivo = db.query(ArchivoMocap).filter(ArchivoMocap.nombre_archivo == filename).first()
+    if not archivo:
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    # Asegúrate de que la ruta del archivo sea correcta
+    file_path = archivo.ruta_archivo  # Ajusta esto si guardas la ruta de otra manera
+
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Archivo no encontrado en el sistema")
+
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type='application/octet-stream'
+    )
 # ---
 # ENDPOINT PARA ARCHIVOS CSV 
 # ---

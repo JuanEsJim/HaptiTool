@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <title>Panel de Administración</title>
-    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js    "></script>
+    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js      "></script>
     <style>
         body {
             font-family: sans-serif;
@@ -96,7 +96,32 @@
             <p id="adminStatus" style="color: green;"></p>
         </form>
     </div>
-
+    <div class="section">
+        <h2>Administrar Archivos</h2>
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+            <input type="text" id="searchAdminInput" placeholder="Buscar archivo..."
+                style="padding: 8px; width: 200px;">
+            <select id="fileTypeAdminFilter">
+                <option value="">Todos los tipos</option>
+                <option value="csv">Solo CSV</option>
+                <option value="c3d">Solo C3D</option>
+            </select>
+        </div>
+        <div id="adminFilesList" style="max-height: 300px; overflow-y: auto;"></div>
+    </div>
+    <div class="section">
+        <h2>Descargar Archivos</h2>
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+            <input type="text" id="searchDownloadInputAdmin" placeholder="Buscar archivo..."
+                style="padding: 8px; width: 200px;">
+            <select id="fileTypeDownloadFilterAdmin">
+                <option value="">Todos los tipos</option>
+                <option value="csv">Solo CSV</option>
+                <option value="c3d">Solo C3D</option>
+            </select>
+        </div>
+        <div id="downloadFilesListAdmin" style="max-height: 300px; overflow-y: auto;"></div>
+    </div>
     <div class="section upload-section">
         <h2>Subir Archivo</h2>
         <p>Selecciona un archivo CSV o C3D para subir.</p>
@@ -122,6 +147,7 @@
         </select>
         <div id="status"></div>
     </div>
+
 
     <div class="section controls" id="animationControls" style="display: none;">
         <button onclick="playAnimation()" id="playBtn" class="control-btn">▶ Reproducir</button>
@@ -257,6 +283,8 @@
             });
         }
 
+        let user = null; // Variable global
+
         document.addEventListener('DOMContentLoaded', async () => {
             const token = localStorage.getItem('access_token');
             if (!token) {
@@ -274,11 +302,13 @@
                     throw new Error(errorData.detail || 'Error al obtener datos de usuario');
                 }
 
-                const user = await res.json();
+                user = await res.json(); // Guardar el usuario en la variable global
 
                 if (user.rol.nombre === 'admin' || user.rol.nombre === 'super_admin') {
                     cargarListaArchivos();
                     loadUserCount();
+                    cargarArchivosParaAdminAdmin(); // Cargar archivos para administrar
+                    cargarArchivosParaDescargarAdmin(); // Cargar archivos para descargar
                 }
 
                 if (user.rol.nombre === 'super_admin') {
@@ -399,7 +429,155 @@
             }
         }
 
+        async function cargarArchivosParaAdminAdmin() {
+            const token = localStorage.getItem('access_token');
+            try {
+                const res = await fetch(`${API_BASE}/lista_archivos/`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!res.ok) throw new Error('Error al obtener la lista de archivos');
+                archivosAdminOriginalesAdmin = await res.json();
 
+                filtrarArchivosParaAdminAdmin(); // Aplicar el filtro inicial
+            } catch (err) {
+                console.error('Error al cargar archivos para administrar:', err);
+            }
+        }
+
+        let archivosAdminOriginalesAdmin = [];
+
+        function filtrarArchivosParaAdminAdmin() {
+            const searchValue = document.getElementById('searchAdminInput').value.toLowerCase();
+            const fileTypeFilter = document.getElementById('fileTypeAdminFilter').value;
+
+            let filteredArchivos = archivosAdminOriginalesAdmin.filter(nombre => {
+                // Filtrar por tipo de archivo
+                if (fileTypeFilter) {
+                    const ext = nombre.toLowerCase().split('.').pop();
+                    if (ext !== fileTypeFilter) {
+                        return false;
+                    }
+                }
+
+                // Filtrar por nombre (búsqueda parcial)
+                if (searchValue) {
+                    if (!nombre.toLowerCase().includes(searchValue)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+
+            // Actualizar la lista de archivos
+            const container = document.getElementById('adminFilesList');
+            container.innerHTML = '';
+
+            if (filteredArchivos.length === 0) {
+                container.innerHTML = '<p>No se encontraron archivos.</p>';
+                return;
+            }
+
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+
+            const headerRow = document.createElement('tr');
+            headerRow.innerHTML = `
+        <th style="border: 1px solid #ddd; padding: 8px;">Nombre del Archivo</th>
+        <th style="border: 1px solid #ddd; padding: 8px;">Tipo</th>
+        <th style="border: 1px solid #ddd; padding: 8px;">Acción</th>
+    `;
+            table.appendChild(headerRow);
+
+            filteredArchivos.forEach(nombre => {
+                const row = document.createElement('tr');
+
+                const ext = nombre.toLowerCase().split('.').pop();
+                const tipo = ext === 'csv' ? 'CSV' : ext === 'c3d' ? 'C3D' : 'Otro';
+
+                // Verificar rol del usuario para mostrar botones
+                const eliminarBtn = user.rol.nombre === 'super_admin' ? `<button class="control-btn" onclick="eliminarArchivoAdmin('${nombre}')">Eliminar</button>` : '';
+                const actualizarBtn = user.rol.nombre === 'admin' || user.rol.nombre === 'super_admin' ? `<button class="control-btn" onclick="actualizarArchivoAdmin('${nombre}')">Actualizar</button>` : '';
+
+                row.innerHTML = `
+            <td style="border: 1px solid #ddd; padding: 8px;">${nombre}</td>
+            <td style="border: 1px solid #ddd; padding: 8px;">${tipo}</td>
+            <td style="border: 1px solid #ddd; padding: 8px;">
+                ${eliminarBtn}
+                ${actualizarBtn}
+            </td>
+        `;
+                table.appendChild(row);
+            });
+
+            container.appendChild(table);
+        }
+
+        function eliminarArchivoAdmin(nombre) {
+            if (!confirm(`¿Estás seguro de que deseas eliminar el archivo "${nombre}"?`)) {
+                return;
+            }
+
+            const token = localStorage.getItem('access_token');
+            fetch(`${API_BASE}/archivo/${encodeURIComponent(nombre)}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+                .then(res => {
+                    if (res.ok) {
+                        alert(`Archivo "${nombre}" eliminado correctamente.`);
+                        cargarArchivosParaAdminAdmin();
+                        cargarArchivosParaDescargarAdmin(); // Actualizar lista de descarga
+                        cargarListaArchivos(); // Actualizar lista de visualización
+                    } else {
+                        return res.json().then(data => { throw new Error(data.detail || 'Error al eliminar archivo'); });
+                    }
+                })
+                .catch(err => {
+                    alert('Error: ' + err.message);
+                });
+        }
+
+        function actualizarArchivoAdmin(nombre) {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = nombre.toLowerCase().endsWith('.c3d') ? '.c3d' : '.csv';
+
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const token = localStorage.getItem('access_token');
+                fetch(`${API_BASE}/archivo/${encodeURIComponent(nombre)}`, {
+                    method: 'PUT',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: formData
+                })
+                    .then(res => {
+                        if (res.ok) {
+                            alert(`Archivo "${nombre}" actualizado correctamente.`);
+                            cargarArchivosParaAdminAdmin();
+                            cargarArchivosParaDescargarAdmin(); // Actualizar lista de descarga
+                            cargarListaArchivos(); // Actualizar lista de visualización
+                        } else {
+                            return res.json().then(data => { throw new Error(data.detail || 'Error al actualizar archivo'); });
+                        }
+                    })
+                    .catch(err => {
+                        alert('Error: ' + err.message);
+                    });
+            };
+
+            input.click();
+        }
+
+        // Agregar listeners a los controles de filtrado
+        document.getElementById('searchAdminInput').addEventListener('input', filtrarArchivosParaAdminAdmin);
+        document.getElementById('fileTypeAdminFilter').addEventListener('change', filtrarArchivosParaAdminAdmin);
         async function cargarListaArchivos() {
             const statusEl = document.getElementById('status');
             const token = localStorage.getItem('access_token');
@@ -458,38 +636,160 @@
         // Agregar listeners a los controles de filtrado
         document.getElementById('searchInput').addEventListener('input', filtrarArchivos);
         document.getElementById('fileTypeFilter').addEventListener('change', filtrarArchivos);
-
-        async function cargarDatos(nombreArchivo) {
-            if (!nombreArchivo) return;
-            stopAnimation();
+        async function cargarArchivosParaDescargarAdmin() {
             const token = localStorage.getItem('access_token');
-            document.getElementById('status').textContent = `Cargando ${nombreArchivo}...`;
             try {
-                const res = await fetch(`${API_BASE}/data/3d?nombre_archivo=${encodeURIComponent(nombreArchivo)}`, {
+                const res = await fetch(`${API_BASE}/lista_archivos/`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
-                if (!res.ok) throw new Error('Error al cargar datos del archivo');
-                const data = await res.json();
-                datosCompletos = data.frames; // Accede a los frames
-                const fileType = data.file_type; // Accede al tipo de archivo
+                if (!res.ok) throw new Error('Error al obtener la lista de archivos');
+                archivosDescargaOriginalesAdmin = await res.json();
 
-                document.getElementById('frameSlider').max = datosCompletos.length > 0 ? datosCompletos.length - 1 : 0;
-                document.getElementById('totalFrames').textContent = datosCompletos.length;
-                document.getElementById('animationControls').style.display = datosCompletos.length > 0 ? 'flex' : 'none';
-
-                if (datosCompletos.length > 0) {
-                    // Pasa los datos del primer frame
-                    inicializarGrafico(datosCompletos[0], fileType); // Pasa el tipo de archivo
-                    goToFrame(0);
-                } else {
-                    Plotly.newPlot('plot3d', [], {});
-                    document.getElementById('status').textContent = 'Archivo sin datos de cinemática';
-                }
+                filtrarArchivosParaDescargaAdmin(); // Aplicar el filtro inicial
             } catch (err) {
-                console.error("Error al cargar datos:", err);
-                document.getElementById('status').textContent = 'Error al cargar datos del archivo';
+                console.error('Error al cargar archivos para descargar:', err);
             }
         }
+
+        let archivosDescargaOriginalesAdmin = [];
+
+        function filtrarArchivosParaDescargaAdmin() {
+            const searchValue = document.getElementById('searchDownloadInputAdmin').value.toLowerCase();
+            const fileTypeFilter = document.getElementById('fileTypeDownloadFilterAdmin').value;
+
+            let filteredArchivos = archivosDescargaOriginalesAdmin.filter(nombre => {
+                // Filtrar por tipo de archivo
+                if (fileTypeFilter) {
+                    const ext = nombre.toLowerCase().split('.').pop();
+                    if (ext !== fileTypeFilter) {
+                        return false;
+                    }
+                }
+
+                // Filtrar por nombre (búsqueda parcial)
+                if (searchValue) {
+                    if (!nombre.toLowerCase().includes(searchValue)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+
+            // Actualizar la lista de archivos
+            const container = document.getElementById('downloadFilesListAdmin');
+            container.innerHTML = '';
+
+            if (filteredArchivos.length === 0) {
+                container.innerHTML = '<p>No se encontraron archivos.</p>';
+                return;
+            }
+
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+
+            const headerRow = document.createElement('tr');
+            headerRow.innerHTML = `
+                <th style="border: 1px solid #ddd; padding: 8px;">Nombre del Archivo</th>
+                <th style="border: 1px solid #ddd; padding: 8px;">Tipo</th>
+                <th style="border: 1px solid #ddd; padding: 8px;">Acción</th>
+            `;
+            table.appendChild(headerRow);
+
+            filteredArchivos.forEach(nombre => {
+                const row = document.createElement('tr');
+
+                const ext = nombre.toLowerCase().split('.').pop();
+                const tipo = ext === 'csv' ? 'CSV' : ext === 'c3d' ? 'C3D' : 'Otro';
+
+                row.innerHTML = `
+                    <td style="border: 1px solid #ddd; padding: 8px;">${nombre}</td>
+                    <td style="border: 1px solid #ddd; padding: 8px;">${tipo}</td>
+                    <td style="border: 1px solid #ddd; padding: 8px;">
+                        <button class="control-btn" onclick="descargarArchivoAdmin('${nombre}')">Descargar</button>
+                    </td>
+                `;
+                table.appendChild(row);
+            });
+
+            container.appendChild(table);
+        }
+
+        function descargarArchivoAdmin(nombre) {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                alert('No se encontró el token de acceso. Por favor, inicia sesión nuevamente.');
+                window.location.href = 'login.html';
+                return;
+            }
+
+            // Crear la URL base sin el token como parámetro
+            const baseUrl = `${API_BASE}/download/${encodeURIComponent(nombre)}`;
+
+            // Usar fetch para manejar la descarga con header de autorización
+            fetch(baseUrl, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                    // No se necesita 'Content-Type' para una solicitud GET simple
+                }
+            })
+                .then(response => {
+                    if (!response.ok) {
+                        // Intenta leer el mensaje de error del backend
+                        return response.text().then(text => {
+                            let errorMsg;
+                            try {
+                                const errorData = JSON.parse(text);
+                                errorMsg = errorData.detail || `Error ${response.status} `;
+                            } catch (e) {
+                                errorMsg = text || `Error ${response.status} `;
+                            }
+                            throw new Error(errorMsg);
+                        });
+                    }
+                    // Obtener el nombre del archivo del header 'content-disposition' si está presente
+                    // o usar el nombre original
+                    const contentDisposition = response.headers.get('content-disposition');
+                    let filename = nombre; // Valor por defecto
+                    if (contentDisposition) {
+                        const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+                        if (filenameMatch.length === 2) {
+                            filename = filenameMatch[1];
+                        }
+                    }
+
+                    return response.blob().then(blob => ({ blob, filename }));
+                })
+                .then(({ blob, filename }) => {
+                    // Crear un enlace temporal para descargar el blob
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = filename; // Nombre del archivo para la descarga
+
+                    document.body.appendChild(a);
+                    a.click(); // Hacer clic en el enlace
+                    document.body.removeChild(a);
+
+                    // Liberar el objeto URL
+                    window.URL.revokeObjectURL(url);
+                })
+                .catch(async (error) => {
+                    console.error('Error al descargar el archivo:', error);
+                    // Si el error es 401, probablemente el token expiró
+                    if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+                        alert('Tu sesión ha expirado. Por favor, inicia sesión nuevamente.');
+                        localStorage.removeItem('access_token');
+                        window.location.href = 'login.html';
+                    } else {
+                        alert(`Error al descargar el archivo: ${error.message} `);
+                    }
+                });
+        }
+
 
         function getSegmentCoordinates(frameData, skeletonName, fileType) {
             const segmentMap = new Map(frameData.map(p => [p.segmento, p]));

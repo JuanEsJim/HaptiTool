@@ -79,7 +79,7 @@
         <p>Visualización de datos de captura de movimiento</p>
         <button class="logout-btn control-btn" onclick="logout()">Cerrar Sesión</button>
     </div>
-
+        
        <div class="section">
         <h2>Visualizar Datos</h2>
         <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
@@ -95,6 +95,18 @@
          </select>
         <div id="status"></div>
      </div>
+     <div class="section">
+        <h2>Descargar Archivos</h2>
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+            <input type="text" id="searchDownloadInput" placeholder="Buscar archivo..." style="padding: 8px; width: 200px;">
+            <select id="fileTypeDownloadFilter">
+                <option value="">Todos los tipos</option>
+                <option value="csv">Solo CSV</option>
+                <option value="c3d">Solo C3D</option>
+            </select>
+        </div>
+        <div id="downloadFilesList" style="max-height: 300px; overflow-y: auto;"></div>
+    </div>
 
     <div class="section controls" id="animationControls" style="display: none;">
         <button onclick="playAnimation()" id="playBtn" class="control-btn">▶ Reproducir</button>
@@ -111,6 +123,7 @@
             <label>Frame: <span id="frameCounter">0</span>/<span id="totalFrames">0</span></label>
             <input type="range" id="frameSlider" min="0" value="0" oninput="goToFrame(parseInt(this.value))">
         </div>
+
     </div>
 
     <div id="plot3dContainer" class="section">
@@ -286,7 +299,7 @@
                 statusEl.textContent = 'Error al cargar lista de archivos';
             }
         }
-
+        
         async function cargarDatos(nombreArchivo) {
             if (!nombreArchivo) return;
             stopAnimation();
@@ -318,7 +331,99 @@
                 document.getElementById('status').textContent = 'Error al cargar datos del archivo';
             }
         }
+        async function cargarArchivosParaDescargar() {
+            const token = localStorage.getItem('access_token');
+            try {
+                const res = await fetch(`${API_BASE}/lista_archivos/`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!res.ok) throw new Error('Error al obtener la lista de archivos');
+                archivosDescargaOriginales = await res.json();
 
+                filtrarArchivosParaDescarga(); // Aplicar el filtro inicial
+            } catch (err) {
+                console.error('Error al cargar archivos para descargar:', err);
+            }
+        }
+
+        let archivosDescargaOriginales = [];
+
+        function filtrarArchivosParaDescarga() {
+            const searchValue = document.getElementById('searchDownloadInput').value.toLowerCase();
+            const fileTypeFilter = document.getElementById('fileTypeDownloadFilter').value;
+
+            let filteredArchivos = archivosDescargaOriginales.filter(nombre => {
+                // Filtrar por tipo de archivo
+                if (fileTypeFilter) {
+                    const ext = nombre.toLowerCase().split('.').pop();
+                    if (ext !== fileTypeFilter) {
+                        return false;
+                    }
+                }
+
+                // Filtrar por nombre (búsqueda parcial)
+                if (searchValue) {
+                    if (!nombre.toLowerCase().includes(searchValue)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            });
+            const container = document.getElementById('downloadFilesList');
+            container.innerHTML = '';
+
+            if (filteredArchivos.length === 0) {
+                container.innerHTML = '<p>No se encontraron archivos.</p>';
+                return;
+            }
+
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+
+            const headerRow = document.createElement('tr');
+            headerRow.innerHTML = `
+                <th style="border: 1px solid #ddd; padding: 8px;">Nombre del Archivo</th>
+                <th style="border: 1px solid #ddd; padding: 8px;">Tipo</th>
+                <th style="border: 1px solid #ddd; padding: 8px;">Acción</th>
+            `;
+            table.appendChild(headerRow);
+
+            filteredArchivos.forEach(nombre => {
+                const row = document.createElement('tr');
+
+                const ext = nombre.toLowerCase().split('.').pop();
+                const tipo = ext === 'csv' ? 'CSV' : ext === 'c3d' ? 'C3D' : 'Otro';
+
+                row.innerHTML = `
+                    <td style="border: 1px solid #ddd; padding: 8px;">${nombre}</td>
+                    <td style="border: 1px solid #ddd; padding: 8px;">${tipo}</td>
+                    <td style="border: 1px solid #ddd; padding: 8px;">
+                        <button class="control-btn" onclick="descargarArchivo('${nombre}')">Descargar</button>
+                    </td>
+                `;
+                table.appendChild(row);
+            });
+
+            container.appendChild(table);
+        }
+
+        function descargarArchivo(nombre) {
+            const token = localStorage.getItem('access_token');
+            const url = `${API_BASE}/download/${encodeURIComponent(nombre)}?token=${token}`;
+            window.open(url, '_blank');
+        }
+
+        // Agregar listeners a los controles de filtrado
+        document.getElementById('searchDownloadInput').addEventListener('input', filtrarArchivosParaDescarga);
+        document.getElementById('fileTypeDownloadFilter').addEventListener('change', filtrarArchivosParaDescarga);
+
+        // Cargar archivos al iniciar
+        window.onload = function() {
+            checkAuthAndRole();
+            cargarArchivosParaDescargar();
+        };
         function getSegmentCoordinates(frameData, skeletonName, fileType) {
             const segmentMap = new Map(frameData.map(p => [p.segmento, p]));
 
