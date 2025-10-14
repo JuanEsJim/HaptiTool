@@ -11,9 +11,9 @@ from sqlalchemy import Column, Integer
 from passlib.context import CryptContext
 import secrets
 from datetime import datetime, timezone
-from database import SessionLocal, engine, Base
-from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Tokens, log_sesion_user
-from schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token
+from app.database import SessionLocal, engine, Base
+from app.models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Tokens, log_sesion_user
+from app.schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 import pandas as pd, io
