@@ -622,10 +622,10 @@ def eliminar_archivo(nombre_archivo: str, db: Session = Depends(get_db), current
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
     sesion_id = archivo.sesion_id
-    CHUNK_SIZE = 1000  # Tamaño del bloque
+    CHUNK_SIZE = 1000 
 
     try:
-        # --- ELIMINACIÓN DE DATOS RELACIONADOS (YA ESTABA BIEN) ---
+       
 
         # 1. Eliminar Contactos en bloques
         while True:
@@ -659,7 +659,6 @@ def eliminar_archivo(nombre_archivo: str, db: Session = Depends(get_db), current
             if result == 0:
                 break
 
-        # --- ELIMINACIÓN DEL ARCHIVO FÍSICO Y REGISTROS DE LA BASE DE DATOS (CORREGIDO) ---
 
         # 5. Eliminar el archivo físico si existe
         if os.path.exists(archivo.ruta_archivo):
@@ -673,12 +672,12 @@ def eliminar_archivo(nombre_archivo: str, db: Session = Depends(get_db), current
                 # Por ahora, continuamos eliminando los registros.
 
         # 6. ***ELIMINAR EL REGISTRO DE LA BASE DE DATOS SIEMPRE***
-        #    Esto debe suceder independientemente de si el archivo físico existía.
+ 
         db.delete(archivo)
-        db.commit()  # Confirmar eliminación del registro del archivo
+        db.commit()  
 
         # 7. ***ELIMINAR LA SESIÓN DE CAPTURA SIEMPRE***
-        #    Ahora que el archivo ya no existe, esta operación no fallará por FK.
+      
         db.query(SesionCaptura).filter(SesionCaptura.sesion_id == sesion_id).delete(synchronize_session=False)
         db.commit()
 
@@ -707,7 +706,7 @@ async def actualizar_archivo(nombre_archivo: str, file: UploadFile = File(...), 
     sesion_id = archivo_existente.sesion_id
 
     try:
-        # --- ELIMINAR DATOS ANTIGUOS DE UNA SOLA VEZ ---
+      
         # 1. Eliminar Contactos relacionados con la sesión
         db.query(Contacto).filter(
             Contacto.frame_id.in_(
@@ -732,10 +731,10 @@ async def actualizar_archivo(nombre_archivo: str, file: UploadFile = File(...), 
         # 4. Eliminar Frames relacionados con la sesión
         db.query(Frame).filter(Frame.sesion_id == sesion_id).delete(synchronize_session=False)
 
-        db.commit() # Confirmar eliminación de datos relacionados
+        db.commit() 
 
         # --- GUARDAR Y ACTUALIZAR EL NUEVO ARCHIVO ---
-        ruta_nueva = f"uploads/{file.filename}"  # Ajusta esta ruta según tu estructura
+        ruta_nueva = f"uploads/{file.filename}"  
         os.makedirs(os.path.dirname(ruta_nueva), exist_ok=True)
 
         # Guardar nuevo archivo
@@ -748,13 +747,6 @@ async def actualizar_archivo(nombre_archivo: str, file: UploadFile = File(...), 
         archivo_existente.fecha_subida = datetime.utcnow()
         db.commit()
 
-        # --- PROCESAR NUEVO ARCHIVO ---
-        # Aquí llamas a la función de procesamiento correspondiente
-        # Ejemplo (ajusta según tus funciones reales):
-        # if extension_nueva == "c3d":
-        #     await procesar_c3d(file, db, current_user, sesion_id)
-        # elif extension_nueva == "csv":
-        #     await procesar_csv(file, db, current_user, sesion_id)
 
         return {"message": f"Archivo '{nombre_archivo}' actualizado correctamente. Los datos antiguos han sido eliminados."}
 

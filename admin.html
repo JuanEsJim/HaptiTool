@@ -612,7 +612,7 @@
                     }
                 }
 
-                // Filtrar por nombre (búsqueda parcial)
+                // Filtrar por nombre 
                 if (searchValue) {
                     if (!nombre.toLowerCase().includes(searchValue)) {
                         return false;
@@ -666,7 +666,7 @@
                     }
                 }
 
-                // Filtrar por nombre (búsqueda parcial)
+                // Filtrar por nombre
                 if (searchValue) {
                     if (!nombre.toLowerCase().includes(searchValue)) {
                         return false;
@@ -779,7 +779,7 @@
                 })
                 .catch(async (error) => {
                     console.error('Error al descargar el archivo:', error);
-                    // Si el error es 401, probablemente el token expiró
+                   
                     if (error.message.includes('401') || error.message.includes('Unauthorized')) {
                         alert('Tu sesión ha expirado. Por favor, inicia sesión nuevamente.');
                         localStorage.removeItem('access_token');
