@@ -390,7 +390,61 @@
                 document.getElementById('userCountDisplay').textContent = "No se pudo cargar el contador.";
             }
         }
+        async function cargarDatos(nombreArchivo) {
+            if (!nombreArchivo) return;
+            stopAnimation(); // Asegúrate de que esta función esté definida
+            const token = localStorage.getItem('access_token');
+            const statusEl = document.getElementById('status'); // Asegúrate de tener un elemento con id="status"
+            statusEl.textContent = `Cargando ${nombreArchivo}...`;
 
+            try {
+                const res = await fetch(`${API_BASE}/data/3d?nombre_archivo=${encodeURIComponent(nombreArchivo)}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (!res.ok) {
+                    const errorData = await res.json();
+                    throw new Error(errorData.detail || 'Error al cargar datos del archivo');
+                }
+
+                const data = await res.json();
+                datosCompletos = data.frames; // Accede a los frames
+                // Si tu backend también manda el tipo de archivo, úsalo
+                // const fileType = data.file_type;
+
+                // Actualiza controles de animación
+                const frameSlider = document.getElementById('frameSlider');
+                const totalFramesSpan = document.getElementById('totalFrames');
+                const animationControls = document.getElementById('animationControls'); // Asegúrate de que este ID exista
+
+                if (frameSlider && totalFramesSpan && animationControls) {
+                    frameSlider.max = datosCompletos.length > 0 ? datosCompletos.length - 1 : 0;
+                    totalFramesSpan.textContent = datosCompletos.length;
+                    animationControls.style.display = datosCompletos.length > 0 ? 'flex' : 'none';
+
+                    if (datosCompletos.length > 0) {
+                        // Suponiendo que tienes una función para inicializar el gráfico
+                        // y que sabes el tipo de archivo (csv/c3d) de alguna manera
+                        // Por ahora asumimos un tipo por defecto o lo detectamos del nombre
+                        const fileType = nombreArchivo.toLowerCase().endsWith('.c3d') ? 'c3d' : 'csv';
+                        inicializarGrafico(datosCompletos[0], fileType); // Pasa el primer frame y el tipo
+                        goToFrame(0); // Asegúrate de que esta función esté definida
+                    } else {
+                        // Si no hay datos, limpia el gráfico
+                        Plotly.newPlot('plot3d', [], {}); // Asegúrate de que 'plot3d' sea el ID del div
+                        statusEl.textContent = 'Archivo sin datos de cinemática';
+                    }
+                } else {
+                    console.warn("Alguno de los elementos de UI necesarios no se encontró.");
+                }
+
+            } catch (err) {
+                console.error("Error al cargar datos:", err);
+                if (statusEl) { // Verificación de seguridad
+                    statusEl.textContent = `Error al cargar datos del archivo: ${err.message}`;
+                }
+            }
+        }
         async function uploadFile() {
             const fileInput = document.getElementById('fileInput');
             const file = fileInput.files[0];
