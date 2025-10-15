@@ -6,7 +6,7 @@ import os
 from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, APIRouter
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import Column, Integer
 from passlib.context import CryptContext
 import secrets
@@ -20,6 +20,7 @@ import pandas as pd, io
 from datetime import datetime, timezone
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
+
 
 
 app = FastAPI()
@@ -93,12 +94,12 @@ async def procesar_csv(file: UploadFile, db: Session, current_user: Usuario, ses
 
         df = df.dropna(how="all").fillna(0)
 
-        # Crear nueva sesión de captura (ya se pasa como parámetro)
+        # Crear nueva sesión de captura 
         nueva_sesion = db.query(SesionCaptura).filter(SesionCaptura.sesion_id == sesion_id).first()
         if not nueva_sesion:
             raise HTTPException(status_code=404, detail="Sesión no encontrada")
 
-        # Crear registro de archivo (ya se pasa como parámetro)
+        # Crear registro de archivo
         nuevo_archivo = db.query(ArchivoMocap).filter(ArchivoMocap.sesion_id == sesion_id).first()
         if not nuevo_archivo:
             raise HTTPException(status_code=404, detail="Archivo no encontrado")
@@ -222,10 +223,6 @@ async def procesar_csv(file: UploadFile, db: Session, current_user: Usuario, ses
 
 
 async def procesar_c3d(file: UploadFile, db: Session, current_user: Usuario, sesion_id: int):
-    """
-    Procesa un archivo C3D y guarda los datos en la base de datos.
-    Reutiliza la lógica del endpoint /upload_c3d/.
-    """
     filename = file.filename.lower()
     if not filename.endswith(".c3d"):
         raise HTTPException(
@@ -614,6 +611,8 @@ def get_3d_data(nombre_archivo: str, db: Session = Depends(get_db), current_user
         "frames": frames_ordenados,
         "file_type": file_type
     }
+    
+
 @app.delete("/archivo/{nombre_archivo}")
 def eliminar_archivo(nombre_archivo: str, db: Session = Depends(get_db), current_user: Usuario = Depends(is_admin)):
     # Buscar el archivo
@@ -659,24 +658,12 @@ def eliminar_archivo(nombre_archivo: str, db: Session = Depends(get_db), current
             if result == 0:
                 break
 
-
-        # 5. Eliminar el archivo físico si existe
-        if os.path.exists(archivo.ruta_archivo):
-            try:
-                os.remove(archivo.ruta_archivo)
-                print(f"Archivo físico eliminado: {archivo.ruta_archivo}") # Opcional: log
-            except OSError as e:
-                # Manejar el caso en que el archivo no se pueda eliminar (permisos, etc.)
-                print(f"Advertencia: No se pudo eliminar el archivo físico {archivo.ruta_archivo}: {e}")
-                # Puedes decidir si esto debe ser un error grave o no.
-                # Por ahora, continuamos eliminando los registros.
-
-        # 6. ***ELIMINAR EL REGISTRO DE LA BASE DE DATOS SIEMPRE***
+        # 5. ELIMINAR EL REGISTRO DE LA BASE DE DATOS SIEMPRE
  
         db.delete(archivo)
         db.commit()  
 
-        # 7. ***ELIMINAR LA SESIÓN DE CAPTURA SIEMPRE***
+        # 6. ELIMINAR LA SESIÓN DE CAPTURA SIEMPRE
       
         db.query(SesionCaptura).filter(SesionCaptura.sesion_id == sesion_id).delete(synchronize_session=False)
         db.commit()
@@ -688,6 +675,56 @@ def eliminar_archivo(nombre_archivo: str, db: Session = Depends(get_db), current
         print(f"Error detallado al eliminar '{nombre_archivo}': {e}") # Log del error
         raise HTTPException(status_code=500, detail=f"Error al eliminar archivo: {str(e)}")
 
+@app.delete("/admin/users/{user_id}")
+def delete_user(
+    user_id: int, 
+    current_user: Usuario = Depends(is_super_admin), 
+    db: Session = Depends(get_db)
+):
+  
+    usuario_a_eliminar = db.query(Usuario).filter(Usuario.usuario_id == user_id).first()
+    if not usuario_a_eliminar:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+ 
+    if usuario_a_eliminar.usuario_id == current_user.usuario_id:
+         raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
+
+    # Eliminar datos relacionados
+ 
+    db.query(Tokens).filter(Tokens.usuario_id == user_id).delete(synchronize_session=False)
+
+    # 2. Eliminar registros de sesión del usuario (log_sesion_user)
+    db.query(log_sesion_user).filter(log_sesion_user.usuario_id == user_id).delete(synchronize_session=False)
+
+    # 3. Eliminar el usuario
+    db.delete(usuario_a_eliminar)
+    db.commit()
+
+    return {"message": f"Usuario '{usuario_a_eliminar.nombre}' eliminado correctamente"}
+
+
+
+class PasswordUpdateRequest(BaseModel):
+    new_password: str
+
+@app.put("/admin/users/{user_id}/password")
+def update_user_password(
+    user_id: int,
+    password_update: PasswordUpdateRequest, 
+    current_user: Usuario = Depends(is_super_admin),
+    db: Session = Depends(get_db)
+):
+    usuario_a_actualizar = db.query(Usuario).filter(Usuario.usuario_id == user_id).first()
+    if not usuario_a_actualizar:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    hashed_password = hash_password(password_update.new_password) 
+    usuario_a_actualizar.password_hash = hashed_password
+
+    db.commit()
+
+    return {"message": f"Contraseña del usuario '{usuario_a_actualizar.nombre}' actualizada correctamente"}
 
 @app.put("/archivo/{nombre_archivo}")
 async def actualizar_archivo(nombre_archivo: str, file: UploadFile = File(...), db: Session = Depends(get_db), current_user: Usuario = Depends(is_admin)):
@@ -733,7 +770,7 @@ async def actualizar_archivo(nombre_archivo: str, file: UploadFile = File(...), 
 
         db.commit() 
 
-        # --- GUARDAR Y ACTUALIZAR EL NUEVO ARCHIVO ---
+        # GUARDAR Y ACTUALIZAR EL NUEVO ARCHIVO
         ruta_nueva = f"uploads/{file.filename}"  
         os.makedirs(os.path.dirname(ruta_nueva), exist_ok=True)
 
@@ -760,23 +797,39 @@ def lista_archivos(db: Session = Depends(get_db),current_user: Usuario = Depends
     archivos = db.query(ArchivoMocap.nombre_archivo).distinct().all()
     return [a[0] for a in archivos if a[0] is not None]
 
+@app.get("/admin/users/", response_model=List[UsuarioResponse])
+def get_all_users(current_user: Usuario = Depends(is_super_admin), db: Session = Depends(get_db)):
+   
+    # Usar joinedload para cargar la relación 'rol' en la misma consulta
+    usuarios = db.query(Usuario).options(joinedload(Usuario.rol)).all()
+    return usuarios
+
 @app.get("/download/{filename}")
-def download_file(filename: str, db: Session = Depends(get_db), current_user: Usuario = Depends(get_current_user)):
+def download_file(
+    filename: str,
+    db: Session = Depends(get_db),
+    current_user: Usuario = Depends(get_current_user)
+):
     archivo = db.query(ArchivoMocap).filter(ArchivoMocap.nombre_archivo == filename).first()
     if not archivo:
         raise HTTPException(status_code=404, detail="Archivo no encontrado")
 
-    # Asegúrate de que la ruta del archivo sea correcta
-    file_path = archivo.ruta_archivo  # Ajusta esto si guardas la ruta de otra manera
+    # Usar la ruta almacenada en la base de datos
+    file_path = archivo.ruta_archivo
 
+    # Verificar que el archivo exista físicamente
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Archivo no encontrado en el sistema")
+        raise HTTPException(status_code=404, detail=f"Archivo no encontrado en el sistema: {file_path}")
 
+    # Servir el archivo
     return FileResponse(
         path=file_path,
         filename=filename,
         media_type='application/octet-stream'
     )
+    
+UPLOAD_FOLDER = "downloads" # Ruta relativa desde la raíz del proyecto
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # ---
 # ENDPOINT PARA ARCHIVOS CSV 
 # ---
@@ -813,7 +866,7 @@ async def upload_csv(
         nuevo_archivo = ArchivoMocap(
             sesion_id=nueva_sesion.sesion_id,
             nombre_archivo=file.filename,
-            ruta_archivo=f"/uploads/{file.filename}",
+            ruta_archivo=f"/downloads/{file.filename}",
             fecha_subida=datetime.now(timezone.utc)
         )
         db.add(nuevo_archivo)
@@ -923,7 +976,10 @@ async def upload_csv(
             db.bulk_save_objects(contactos_bulk)
 
         db.commit()
-
+        file_location = os.path.join(UPLOAD_FOLDER, file.filename)
+        with open(file_location, "wb") as f:
+            f.write(contents)
+            
         return {
             "message": " CSV procesado y guardado correctamente (optimizado)",
             "archivo_id": nuevo_archivo.archivo_id,
