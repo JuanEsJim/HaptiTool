@@ -131,7 +131,13 @@
         </div>
         <div id="uploadStatus"></div>
     </div>
+    <div id="gestionUsuariosSection" class="section" style="display: none;">
+        <h2>Gestión de Usuarios</h2>
+        <button class="control-btn" onclick="cargarListaUsuarios()">↻ Recargar Lista</button>
+        <div id="listaUsuariosContainer" style="margin-top: 20px;">
 
+        </div>
+    </div>
     <div class="section">
         <h2>Visualizar Datos</h2>
         <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
@@ -313,6 +319,7 @@
 
                 if (user.rol.nombre === 'super_admin') {
                     createAdminBtn.style.display = 'block';
+                    mostrarSeccionGestionUsuarios();
                 }
 
             } catch (err) {
@@ -390,61 +397,7 @@
                 document.getElementById('userCountDisplay').textContent = "No se pudo cargar el contador.";
             }
         }
-        async function cargarDatos(nombreArchivo) {
-            if (!nombreArchivo) return;
-            stopAnimation(); // Asegúrate de que esta función esté definida
-            const token = localStorage.getItem('access_token');
-            const statusEl = document.getElementById('status'); // Asegúrate de tener un elemento con id="status"
-            statusEl.textContent = `Cargando ${nombreArchivo}...`;
 
-            try {
-                const res = await fetch(`${API_BASE}/data/3d?nombre_archivo=${encodeURIComponent(nombreArchivo)}`, {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-
-                if (!res.ok) {
-                    const errorData = await res.json();
-                    throw new Error(errorData.detail || 'Error al cargar datos del archivo');
-                }
-
-                const data = await res.json();
-                datosCompletos = data.frames; // Accede a los frames
-                // Si tu backend también manda el tipo de archivo, úsalo
-                // const fileType = data.file_type;
-
-                // Actualiza controles de animación
-                const frameSlider = document.getElementById('frameSlider');
-                const totalFramesSpan = document.getElementById('totalFrames');
-                const animationControls = document.getElementById('animationControls'); // Asegúrate de que este ID exista
-
-                if (frameSlider && totalFramesSpan && animationControls) {
-                    frameSlider.max = datosCompletos.length > 0 ? datosCompletos.length - 1 : 0;
-                    totalFramesSpan.textContent = datosCompletos.length;
-                    animationControls.style.display = datosCompletos.length > 0 ? 'flex' : 'none';
-
-                    if (datosCompletos.length > 0) {
-                        // Suponiendo que tienes una función para inicializar el gráfico
-                        // y que sabes el tipo de archivo (csv/c3d) de alguna manera
-                        // Por ahora asumimos un tipo por defecto o lo detectamos del nombre
-                        const fileType = nombreArchivo.toLowerCase().endsWith('.c3d') ? 'c3d' : 'csv';
-                        inicializarGrafico(datosCompletos[0], fileType); // Pasa el primer frame y el tipo
-                        goToFrame(0); // Asegúrate de que esta función esté definida
-                    } else {
-                        // Si no hay datos, limpia el gráfico
-                        Plotly.newPlot('plot3d', [], {}); // Asegúrate de que 'plot3d' sea el ID del div
-                        statusEl.textContent = 'Archivo sin datos de cinemática';
-                    }
-                } else {
-                    console.warn("Alguno de los elementos de UI necesarios no se encontró.");
-                }
-
-            } catch (err) {
-                console.error("Error al cargar datos:", err);
-                if (statusEl) { // Verificación de seguridad
-                    statusEl.textContent = `Error al cargar datos del archivo: ${err.message}`;
-                }
-            }
-        }
         async function uploadFile() {
             const fileInput = document.getElementById('fileInput');
             const file = fileInput.files[0];
@@ -769,7 +722,180 @@
 
             container.appendChild(table);
         }
+        function mostrarSeccionGestionUsuarios() {
+            const seccion = document.getElementById('gestionUsuariosSection');
+            if (user && user.rol.nombre === 'super_admin') {
+                seccion.style.display = 'block';
+                cargarListaUsuarios(); // Cargar la lista automáticamente al mostrar la sección
+            } else {
+                seccion.style.display = 'none';
+            }
+        }
 
+        /**
+         * Obtiene la lista de usuarios desde el backend y la muestra en una tabla linea 816
+         */
+        async function cargarListaUsuarios() {
+            const token = localStorage.getItem('access_token');
+            const container = document.getElementById('listaUsuariosContainer');
+            container.innerHTML = '<p>Cargando usuarios...</p>';
+
+            try {
+                const res = await fetch(`${API_BASE}/admin/users/`, {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json' 
+                    }
+                });
+
+                if (!res.ok) {
+                    if (res.status === 403) {
+                        throw new Error("Acceso denegado. Solo superadministradores pueden acceder.");
+                    }
+                    const errorData = await res.json();
+                    throw new Error(errorData.detail || `Error al obtener la lista de usuarios (${res.status})`);
+                }
+
+                const usuarios = await res.json();
+
+                if (!Array.isArray(usuarios) || usuarios.length === 0) {
+                    container.innerHTML = '<p>No se encontraron usuarios.</p>';
+                    return;
+                }
+
+               // se contruye la tabla HTML
+                let tablaHTML = `
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+            <thead>
+                <tr style="background-color: #f2f2f2;">
+                    <th style="border: 1px solid #ddd; padding: 8px;">ID</th>
+                    <th style="border: 1px solid #ddd; padding: 8px;">Nombre</th>
+                    <th style="border: 1px solid #ddd; padding: 8px;">Email</th>
+                    <th style="border: 1px solid #ddd; padding: 8px;">Rol</th>
+                    <th style="border: 1px solid #ddd; padding: 8px;">Acciones</th>
+                </tr>
+            </thead>
+            <tbody>
+        `;
+
+                usuarios.forEach(u => {
+                   
+                    const acciones = u.usuario_id === user.usuario_id ?
+                        `<em>(Tú)</em>` :
+                        `
+                <button class="control-btn" style="margin-right: 5px;" onclick="abrirModalActualizarPassword(${u.usuario_id}, '${u.nombre}')">Cambiar Contraseña</button>
+                <button class="control-btn" style="background-color: #d32f2f;" onclick="eliminarUsuario(${u.usuario_id}, '${u.nombre}')">Eliminar</button>
+                `;
+
+                    tablaHTML += `
+                <tr>
+                    <td style="border: 1px solid #ddd; padding: 8px;">${u.usuario_id}</td>
+                    <td style="border: 1px solid #ddd; padding: 8px;">${u.nombre}</td>
+                    <td style="border: 1px solid #ddd; padding: 8px;">${u.email}</td>
+                    <td style="border: 1px solid #ddd; padding: 8px;">${u.rol ? u.rol.nombre : 'Sin rol'}</td>
+                    <td style="border: 1px solid #ddd; padding: 8px;">${acciones}</td>
+                </tr>
+            `;
+                });
+
+                tablaHTML += `
+            </tbody>
+        </table>
+        `;
+
+                container.innerHTML = tablaHTML;
+
+            } catch (err) {
+                console.error("Error al cargar la lista de usuarios:", err);
+                container.innerHTML = `<p style="color: red;">Error: ${err.message}</p>`;
+            }
+        }
+
+        /**
+         * Solicita la nueva contraseña y la envía al backend para actualizarla.
+         */
+        function abrirModalActualizarPassword(usuarioId, nombreUsuario) {
+            const nuevaPass = prompt(`Ingrese la nueva contraseña para el usuario "${nombreUsuario}":`);
+            if (nuevaPass !== null && nuevaPass.trim() !== '') {
+                actualizarPasswordUsuario(usuarioId, nuevaPass.trim());
+            } else if (nuevaPass !== null) {
+                alert("La contraseña no puede estar vacía.");
+            }
+            // Si es null, el usuario canceló, no hacer nada.
+        }
+
+        async function actualizarPasswordUsuario(usuarioId, nuevaPassword) {
+            const token = localStorage.getItem('access_token');
+
+            try {
+                const res = await fetch(`${API_BASE}/admin/users/${usuarioId}/password`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ new_password: nuevaPassword }) // El back espera este formato 
+                });
+
+                if (!res.ok) {
+                    const errorData = await res.json();
+                    throw new Error(errorData.detail || `Error al actualizar la contraseña (${res.status})`);
+                }
+
+                const data = await res.json();
+                alert(data.message || 'Contraseña actualizada correctamente.');
+                // cargarListaUsuarios();
+
+            } catch (err) {
+                console.error("Error al actualizar contraseña:", err);
+                alert(`Error: ${err.message}`);
+            }
+        }
+
+
+        /**
+         * Confirma y solicita la eliminación de un usuario.
+         */
+        function eliminarUsuario(usuarioId, nombreUsuario) {
+           
+            if (usuarioId === user.usuario_id) {
+                alert("No puedes eliminarte a ti mismo.");
+                return;
+            }
+
+            if (confirm(`¿Estás seguro de que deseas eliminar al usuario "${nombreUsuario}" (ID: ${usuarioId})? Esta acción no se puede deshacer.`)) {
+                eliminarUsuarioBackend(usuarioId);
+            }
+        }
+
+        async function eliminarUsuarioBackend(usuarioId) {
+            const token = localStorage.getItem('access_token');
+
+            try {
+                const res = await fetch(`${API_BASE}/admin/users/${usuarioId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        
+                    }
+                });
+
+                if (!res.ok) {
+                    const errorData = await res.json();
+                    throw new Error(errorData.detail || `Error al eliminar el usuario (${res.status})`);
+                }
+
+                const data = await res.json();
+                alert(data.message || 'Usuario eliminado correctamente.');
+                // Recargar la lista de usuarios después de eliminar
+                cargarListaUsuarios();
+
+            } catch (err) {
+                console.error("Error al eliminar usuario:", err);
+                alert(`Error: ${err.message}`);
+            }
+        }
         function descargarArchivoAdmin(nombre) {
             const token = localStorage.getItem('access_token');
             if (!token) {
@@ -786,7 +912,7 @@
                 method: 'GET',
                 headers: {
                     'Authorization': `Bearer ${token}`
-                    // No se necesita 'Content-Type' para una solicitud GET simple
+                   
                 }
             })
                 .then(response => {
@@ -833,7 +959,7 @@
                 })
                 .catch(async (error) => {
                     console.error('Error al descargar el archivo:', error);
-                   
+
                     if (error.message.includes('401') || error.message.includes('Unauthorized')) {
                         alert('Tu sesión ha expirado. Por favor, inicia sesión nuevamente.');
                         localStorage.removeItem('access_token');
