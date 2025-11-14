@@ -1,0 +1,16 @@
+frame,point,x,y,z,marker
+1,1,0.0,0.0,0.0,Pelvis
+1,2,0.0,100.0,0.0,Spine
+1,3,0.0,200.0,0.0,Chest
+1,4,-50.0,200.0,0.0,LeftShoulder
+1,5,-150.0,200.0,0.0,LeftElbow
+1,6,-250.0,200.0,0.0,LeftWrist
+1,7,50.0,200.0,0.0,RightShoulder
+1,8,150.0,200.0,0.0,RightElbow
+1,9,250.0,200.0,0.0,RightWrist
+1,10,-50.0,0.0,0.0,LeftHip
+1,11,-50.0,-150.0,0.0,LeftKnee
+1,12,-50.0,-300.0,0.0,LeftAnkle
+1,13,50.0,0.0,0.0,RightHip
+1,14,50.0,-150.0,0.0,RightKnee
+1,15,50.0,-300.0,0.0,RightAnkle

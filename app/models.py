@@ -1,7 +1,7 @@
 from sqlalchemy import Column, Integer, Float, String, Boolean, ForeignKey, BigInteger, Text, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import declarative_base
-from database import Base
+from app.database import Base
 from datetime import datetime
 Base = declarative_base()
 
@@ -86,6 +86,7 @@ class Tokens(Base):
     token_id = Column(Integer, primary_key=True, index=True)
     access_token = Column(String, unique=True, index=True)
     usuario_id = Column(Integer, ForeignKey("usuario.usuario_id"))
+    expira_en = Column(DateTime, nullable=True)  # ✅ nullable=True para backward compatibility
     usuario = relationship("Usuario")
 
 class log_sesion_user(Base):
