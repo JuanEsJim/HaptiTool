@@ -86,6 +86,7 @@ class Tokens(Base):
     token_id = Column(Integer, primary_key=True, index=True)
     access_token = Column(String, unique=True, index=True)
     usuario_id = Column(Integer, ForeignKey("usuario.usuario_id"))
+    expira_en = Column(DateTime, nullable=True)  # ✅ nullable=True para backward compatibility
     usuario = relationship("Usuario")
 
 class log_sesion_user(Base):

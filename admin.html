@@ -545,7 +545,37 @@
                     alert('Error: ' + err.message);
                 });
         }
+        async function cargarDatos(nombreArchivo) {
+            if (!nombreArchivo) return;
+            stopAnimation();
+            const token = localStorage.getItem('access_token');
+            document.getElementById('status').textContent = `Cargando ${nombreArchivo}...`;
+            try {
+                const res = await fetch(`${API_BASE}/data/3d?nombre_archivo=${encodeURIComponent(nombreArchivo)}`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (!res.ok) throw new Error('Error al cargar datos del archivo');
+                const data = await res.json();
+                datosCompletos = data.frames; // Accede a los frames
+                const fileType = data.file_type; // Accede al tipo de archivo
 
+                document.getElementById('frameSlider').max = datosCompletos.length > 0 ? datosCompletos.length - 1 : 0;
+                document.getElementById('totalFrames').textContent = datosCompletos.length;
+                document.getElementById('animationControls').style.display = datosCompletos.length > 0 ? 'flex' : 'none';
+
+                if (datosCompletos.length > 0) {
+                    // Pasa los datos del primer frame
+                    inicializarGrafico(datosCompletos[0], fileType); // Pasa el tipo de archivo
+                    goToFrame(0);
+                } else {
+                    Plotly.newPlot('plot3d', [], {});
+                    document.getElementById('status').textContent = 'Archivo sin datos de cinemática';
+                }
+            } catch (err) {
+                console.error("Error al cargar datos:", err);
+                document.getElementById('status').textContent = 'Error al cargar datos del archivo';
+            }
+        }
         function actualizarArchivoAdmin(nombre) {
             const input = document.createElement('input');
             input.type = 'file';
