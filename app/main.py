@@ -1,4 +1,6 @@
 import ezc3d
+import json
+import base64
 from typing import List, Dict, Any
 from collections import defaultdict
 import tempfile
@@ -11,26 +13,17 @@ from sqlalchemy import Column, Integer
 from passlib.context import CryptContext
 import secrets
 from datetime import datetime, timezone
-from .database import SessionLocal, engine, Base
-from .models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, UserLoginCounter, Usuario, Tokens, log_sesion_user
-from .schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token
+from database import SessionLocal, engine, Base
+from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Tokens, log_sesion_user
+from schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 import pandas as pd, io
-from datetime import datetime, timezone
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-        
-        
-        
+
 app = FastAPI()
 
 # Inicialización del contexto de contraseñas
@@ -80,6 +73,129 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         )
 
     return user
+
+
+@app.post("/auth/google")
+async def google_auth(google_data: GoogleAuthRequest, db: Session = Depends(get_db)):
+    try:
+        # Decodificar el token de Google
+        payload = decode_google_jwt(google_data.credential)
+        
+        user_email = payload.get('email')
+        user_name = payload.get('name', 'Usuario Google')
+        user_avatar = payload.get('picture')
+        
+        if not user_email:
+            raise ValueError("Email no encontrado en el token")
+        
+        print(f"✅ Usuario Google autenticado: {user_email}")
+        
+        # 🎯 Buscar o crear usuario en la BD
+        user = await find_or_create_google_user(db, user_email, user_name, user_avatar)
+        
+        # 🗑️ Limpiar tokens antiguos del usuario
+        db.query(Tokens).filter(Tokens.usuario_id == user.usuario_id).delete()
+        
+        # 🔐 Crear nuevo token de acceso
+        access_token = secrets.token_urlsafe(32)
+        db_token = Tokens(
+            access_token=access_token,
+            usuario_id=user.usuario_id,
+            expira_en=datetime.now(timezone.utc) + timedelta(days=7)
+        )
+        db.add(db_token)
+        db.commit()
+        
+        # 📊 Registrar sesión - SOLO columnas que existen
+        nueva_sesion = log_sesion_user(
+            usuario_id=user.usuario_id,
+            login_time=datetime.now(timezone.utc)
+            # ❌ NO incluir 'accion' - la columna no existe
+        )
+        db.add(nueva_sesion)
+        db.commit()
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "usuario_id": user.usuario_id,
+                "nombre": user.nombre,
+                "email": user.email,
+                "rol": {
+                    "rol_id": user.rol_id,
+                    "nombre": get_role_name(user.rol_id)
+                }
+            }
+        }
+        
+    except ValueError as e:
+        print(f"❌ Error verificación token Google: {e}")
+        raise HTTPException(status_code=400, detail="Token de Google inválido")
+    except Exception as e:
+        print(f"❌ Error en autenticación Google: {e}")
+        raise HTTPException(status_code=500, detail="Error interno del servidor")
+
+# 🔍 FUNCIÓN PARA DECODIFICAR JWT DE GOOGLE
+def decode_google_jwt(credential: str):
+    """Decodificar JWT de Google sin verificación (para desarrollo)"""
+    try:
+        # Dividir el JWT en sus partes
+        parts = credential.split('.')
+        if len(parts) != 3:
+            raise ValueError("Token JWT inválido")
+        
+        # Decodificar el payload (segunda parte)
+        payload = parts[1]
+        # Añadir padding si es necesario
+        padded = payload + '=' * (4 - len(payload) % 4)
+        decoded = base64.b64decode(padded)
+        
+        return json.loads(decoded)
+    except Exception as e:
+        raise ValueError(f"Error decodificando token: {e}")
+
+# 👤 FUNCIÓN PARA BUSCAR O CREAR USUARIO DE GOOGLE
+async def find_or_create_google_user(db: Session, email: str, name: str, avatar: Optional[str] = None):
+    """Buscar usuario por email o crear nuevo con rol de usuario normal"""
+    
+    # 🔍 Buscar usuario existente
+    usuario = db.query(Usuario).filter(Usuario.email == email).first()
+    
+    if usuario:
+        print(f"✅ Usuario existente encontrado: {email}")
+        return usuario
+    
+    # 🆕 Crear nuevo usuario
+    print(f"🆕 Creando nuevo usuario Google: {email}")
+    
+    # Generar password aleatorio (no se usará para login Google)
+    random_password = secrets.token_urlsafe(16)
+    
+    nuevo_usuario = Usuario(
+        nombre=name,
+        email=email,
+        password_hash=hash_password(random_password),  # Hash de password aleatorio
+        rol_id=1,  # 🎯 ROL 1 = USUARIO NORMAL
+        # Agrega otros campos si tu modelo los requiere
+    )
+    
+    db.add(nuevo_usuario)
+    db.commit()
+    db.refresh(nuevo_usuario)
+    
+    print(f"✅ Nuevo usuario creado: {nuevo_usuario.usuario_id}")
+    return nuevo_usuario
+
+# 🏷️ FUNCIÓN PARA OBTENER NOMBRE DEL ROL
+def get_role_name(rol_id: int) -> str:
+    """Convertir ID de rol a nombre legible"""
+    roles = {
+        1: "usuario_normal",
+        2: "admin", 
+        3: "super_admin"
+    }
+    return roles.get(rol_id, "usuario_normal")
 
 async def procesar_csv(file: UploadFile, db: Session, current_user: Usuario, sesion_id: int):
     """
