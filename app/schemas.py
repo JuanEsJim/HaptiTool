@@ -2,6 +2,7 @@
 from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
+from pydantic.config import ConfigDict
 
 
 class UsuarioBase(BaseModel):
@@ -16,16 +17,14 @@ class RolResponse(BaseModel):
     rol_id: int
     nombre: str
 
-    class Config:
-        from_attributes = True  
+    model_config = ConfigDict(from_attributes=True)
         
 class UsuarioResponse(UsuarioBase):
     usuario_id: int
     rol_id: int
     rol: Optional[RolResponse] = None
 
-    class Config:
-         orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SesionResponse(BaseModel):
     sesion_id: int

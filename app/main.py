@@ -11,9 +11,9 @@ from sqlalchemy import Column, Integer
 from passlib.context import CryptContext
 import secrets
 from datetime import datetime, timezone
-from database import SessionLocal, engine, Base
-from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Tokens, log_sesion_user
-from schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token
+from .database import SessionLocal, engine, Base
+from .models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, UserLoginCounter, Usuario, Tokens, log_sesion_user
+from .schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 import pandas as pd, io
@@ -22,14 +22,22 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
 
-
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+        
+        
+        
 app = FastAPI()
 
 # Inicialización del contexto de contraseñas
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Asegurar que las tablas existen en la BD
-Base.metadata.create_all(bind=engine)
+#Base.metadata.create_all(bind=engine)
 
 # CORS
 app.add_middleware(
@@ -40,13 +48,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Dependencia de la base de datos
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
 
 
 def hash_password(password: str):
@@ -338,12 +340,6 @@ class UsuarioCreate(BaseModel):
     password: str
 
 # CONTADOR GLOBAL 
-
-class UserLoginCounter(Base):
-    __tablename__ = "user_login_counter"
-    id = Column(Integer, primary_key=True, default=1)
-    count = Column(Integer, default=0)
-
 @app.post("/register", response_model=UsuarioResponse)
 def register_user(user: UsuarioCreate, db: Session = Depends(get_db)):
     # Verificar si el correo ya existe
@@ -372,6 +368,7 @@ def register_user(user: UsuarioCreate, db: Session = Depends(get_db)):
 
 @app.post("/login", response_model=Token)
 def login_for_access_token(user: UserLogin, db: Session = Depends(get_db)):
+    print("DEBUG: login endpoint - db.bind:", db.bind.url) # <-- Confirmar que es SQLite
     user_db = db.query(Usuario).filter(Usuario.email == user.email).first()
     if not user_db or not verify_password(user.password, user_db.password_hash):
         raise HTTPException(
@@ -383,8 +380,9 @@ def login_for_access_token(user: UserLogin, db: Session = Depends(get_db)):
     # Registrar inicio de sesión
     session_log = log_sesion_user(usuario_id=user_db.usuario_id)
     db.add(session_log)
-    db.commit()
-    db.refresh(session_log)
+    db.commit() # <-- Guarda el objeto en la DB
+    db.refresh(session_log) # <-- Recarga el objeto para obtener 'id' y 'login_time' generados por la DB
+    print(f"DEBUG: login endpoint - ID generado por commit y refresh: {session_log.id}, Login time: {session_log.login_time}")
 
     # Incrementar contador de usuarios que han entrado
     counter = db.query(UserLoginCounter).first()
@@ -393,41 +391,50 @@ def login_for_access_token(user: UserLogin, db: Session = Depends(get_db)):
         db.add(counter)
     else:
         counter.count += 1
-    db.commit()
+    db.commit() # <-- Este commit está bien
 
     access_token = secrets.token_hex(32)
     db_token = Tokens(access_token=access_token, usuario_id=user_db.usuario_id)
     db.add(db_token)
     db.commit()
-    db.refresh(db_token)
+    db.refresh(db_token) # <-- Este refresh es para 'db_token'
 
     return {"access_token": access_token}
 
-@app.post("/logout")
-def logout_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    # Buscar el token
-    db_token = db.query(Tokens).filter(Tokens.access_token == token).first()
-    if not db_token:
+@app.post("/login", response_model=Token)
+def login_for_access_token(user: UserLogin, db: Session = Depends(get_db)):
+    print("DEBUG: login endpoint - db.bind:", db.bind.url) # <-- Confirmar que es SQLite
+    user_db = db.query(Usuario).filter(Usuario.email == user.email).first()
+    if not user_db or not verify_password(user.password, user_db.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido o expirado",
+            detail="Credenciales incorrectas",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # Buscar la sesión más reciente sin logout_time
-    session = db.query(log_sesion_user).filter(
-        log_sesion_user.usuario_id == db_token.usuario_id,
-        log_sesion_user.logout_time == None
-    ).order_by(log_sesion_user.login_time.desc()).first()
+    # Registrar inicio de sesión
+    session_log = log_sesion_user(usuario_id=user_db.usuario_id)
+    db.add(session_log)
+    db.commit() # <-- Guarda el objeto en la DB
+    db.refresh(session_log) # <-- Recarga el objeto para obtener 'id' y 'login_time' generados por la DB
+    print(f"DEBUG: login endpoint - ID generado por commit y refresh: {session_log.id}, Login time: {session_log.login_time}")
 
-    if session:
-        session.logout_time = datetime.utcnow()
-        db.commit()
+    # Incrementar contador de usuarios que han entrado
+    counter = db.query(UserLoginCounter).first()
+    if not counter:
+        counter = UserLoginCounter(count=1)
+        db.add(counter)
+    else:
+        counter.count += 1
+    db.commit() # <-- Este commit está bien
 
-    # Eliminar el token
-    db.delete(db_token)
+    access_token = secrets.token_hex(32)
+    db_token = Tokens(access_token=access_token, usuario_id=user_db.usuario_id)
+    db.add(db_token)
     db.commit()
+    db.refresh(db_token) # <-- Este refresh es para 'db_token'
 
-    return {"message": "Sesión cerrada correctamente"}
+    return {"access_token": access_token}
 
 @app.get("/admin/session-logs/")
 def get_session_logs(current_user: Usuario = Depends(is_admin), db: Session = Depends(get_db)):
@@ -457,7 +464,7 @@ def get_user_login_count(current_user: Usuario = Depends(is_admin), db: Session 
     return {"total_users": counter.count}
 
 @app.get("/users/me")
-def read_users_me(current_user: Usuario = Depends(get_current_user)):
+def read_users_me(current_user: Usuario = Depends(get_current_user), db: Session = Depends(get_db)):
     return {
         "usuario_id": current_user.usuario_id,
         "nombre": current_user.nombre,
@@ -572,12 +579,12 @@ def get_3d_data(nombre_archivo: str, db: Session = Depends(get_db), current_user
     if not archivo:
         raise HTTPException(status_code=404, detail=f"Archivo '{nombre_archivo}' no encontrado")
 
-    frame_ids = db.query(Frame.frame_id).filter(Frame.sesion_id == archivo.sesion_id).limit(50).subquery()
+    frame_ids_query = db.query(Frame.frame_id).filter(Frame.sesion_id == archivo.sesion_id).limit(50).scalar_subquery()
 
     data = (
         db.query(Cinematica, Segmento.nombre, Cinematica.frame_id)
         .join(Segmento, Cinematica.segmento_id == Segmento.segmento_id)
-        .filter(Cinematica.frame_id.in_(frame_ids))
+        .filter(Cinematica.frame_id.in_(frame_ids_query))
         .order_by(Cinematica.frame_id, Segmento.nombre)
         .all()
     )

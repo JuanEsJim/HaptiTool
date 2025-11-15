@@ -1,9 +1,8 @@
 from sqlalchemy import Column, Integer, Float, String, Boolean, ForeignKey, BigInteger, Text, DateTime
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import declarative_base
-from database import Base
-from datetime import datetime
-Base = declarative_base()
+from .database import Base
+from datetime import datetime, timezone
 
 class Rol(Base):
     __tablename__ = "rol"
@@ -23,7 +22,7 @@ class SesionCaptura(Base):
     __tablename__ = "sesioncaptura"
     sesion_id = Column(Integer, primary_key=True, index=True)
     usuario_id = Column(Integer, ForeignKey("usuario.usuario_id"), nullable=False)
-    fecha = Column(DateTime, default=datetime.utcnow)
+    fecha = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     descripcion = Column(Text)
     usuario = relationship("Usuario")
 
@@ -33,7 +32,7 @@ class ArchivoMocap(Base):
     sesion_id = Column(Integer, ForeignKey("sesioncaptura.sesion_id"), nullable=False)
     nombre_archivo = Column(String(255), nullable=False)
     ruta_archivo = Column(Text, nullable=False)
-    fecha_subida = Column(DateTime, default=datetime.utcnow)
+    fecha_subida = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     sesion = relationship("SesionCaptura")
 
 class Frame(Base):
@@ -92,7 +91,7 @@ class log_sesion_user(Base):
     __tablename__ = "log_sesion_user"
     id = Column(Integer, primary_key=True, index=True)
     usuario_id = Column(Integer, ForeignKey("usuario.usuario_id"), nullable=False)
-    login_time = Column(DateTime, default=datetime.utcnow)
+    login_time = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     logout_time = Column(DateTime, nullable=True)
 
 class UserLoginCounter(Base):
