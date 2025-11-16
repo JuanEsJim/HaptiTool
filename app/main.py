@@ -12,18 +12,22 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import Column, Integer
 from passlib.context import CryptContext
 import secrets
-from datetime import datetime, timezone
-from database import SessionLocal, engine, Base
-from models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Tokens, log_sesion_user
-from schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token
+from datetime import datetime, timezone, timedelta
+from app.database import SessionLocal, engine, Base
+from app.models import AnguloArticular, ArchivoMocap, Cinematica, Contacto, Frame, Segmento, SesionCaptura, Usuario, Tokens, log_sesion_user, UserLoginCounter
+from app.schemas import UsuarioCreate, UsuarioResponse, UserLogin, Token
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 import pandas as pd, io
 from fastapi import HTTPException
 from fastapi.responses import FileResponse
+from typing import Optional
 
+JWT_SECRET = "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"  # Puede ser diferente a tu JWT normal
+JWT_ALGORITHM = "HS256"
 
-
+class GoogleAuthRequest(BaseModel):
+    credential: str
 app = FastAPI()
 
 # Inicialización del contexto de contraseñas
@@ -41,7 +45,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def hash_password(password: str):
